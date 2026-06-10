@@ -1,0 +1,32 @@
+app-id: ai.wintrip.Dreamweaver
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: dreamweaver-comfy
+finish-args:
+  - --share=network
+  - --filesystem=home:ro
+  - --talk-name=org.freedesktop.portal.Desktop
+modules:
+  - name: dreamweaver-comfy
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 scripts/dreamweaver-comfy /app/bin/dreamweaver-comfy
+      - install -Dm644 server.py /app/share/dreamweaver-comfy/server.py
+      - install -Dm644 index.html /app/share/dreamweaver-comfy/index.html
+      - install -Dm644 styles.css /app/share/dreamweaver-comfy/styles.css
+      - install -Dm644 main.js /app/share/dreamweaver-comfy/main.js
+      - install -Dm644 state.js /app/share/dreamweaver-comfy/state.js
+      - install -Dm644 storage.js /app/share/dreamweaver-comfy/storage.js
+      - install -Dm644 api.js /app/share/dreamweaver-comfy/api.js
+      - install -Dm644 package.json /app/share/dreamweaver-comfy/package.json
+      - install -Dm644 ui/background.js /app/share/dreamweaver-comfy/ui/background.js
+      - install -Dm644 ui/dream-player.js /app/share/dreamweaver-comfy/ui/dream-player.js
+      - install -Dm644 ui/history-view.js /app/share/dreamweaver-comfy/ui/history-view.js
+      - install -Dm644 ui/toast-view.js /app/share/dreamweaver-comfy/ui/toast-view.js
+      - install -Dm644 data/ai.wintrip.Dreamweaver.desktop /app/share/applications/ai.wintrip.Dreamweaver.desktop
+      - install -Dm644 data/ai.wintrip.Dreamweaver.metainfo.xml /app/share/metainfo/ai.wintrip.Dreamweaver.metainfo.xml
+      - install -Dm644 data/icons/hicolor/scalable/apps/ai.wintrip.Dreamweaver.svg /app/share/icons/hicolor/scalable/apps/ai.wintrip.Dreamweaver.svg
+    sources:
+      - type: dir
+        path: .

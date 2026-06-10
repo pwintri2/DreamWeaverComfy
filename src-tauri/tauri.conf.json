@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Dreamweaver Comfy",
+  "version": "0.2.4",
+  "identifier": "ai.wintrip.Dreamweaver",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "sh scripts/prepare-tauri-assets.sh",
+    "devUrl": "http://127.0.0.1:8791",
+    "frontendDist": "../desktop-dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Dreamweaver Comfy",
+        "width": 1180,
+        "height": 820,
+        "minWidth": 760,
+        "minHeight": 620,
+        "url": "http://127.0.0.1:8791/?v=0.2.4"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb"],
+    "category": "Graphics and Design",
+    "shortDescription": "Local comic and dream generator for ComfyUI",
+    "longDescription": "Dreamweaver Comfy is a local desktop app that turns long story text into A4 comic pages with character continuity, scene planning, panel prompts, and ComfyUI-rendered images. It also keeps the original dream video and image loop tools.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ],
+    "resources": [
+      "../server.py",
+      "../index.html",
+      "../styles.css",
+      "../main.js",
+      "../state.js",
+      "../storage.js",
+      "../api.js",
+      "../package.json",
+      "../ui/background.js",
+      "../ui/dream-player.js",
+      "../ui/history-view.js",
+      "../ui/toast-view.js"
+    ],
+    "linux": {
+      "deb": {
+        "depends": ["python3"]
+      }
+    }
+  }
+}

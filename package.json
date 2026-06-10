@@ -1,0 +1,14 @@
+{
+  "name": "dreamweaver-comfy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "for file in main.js api.js state.js storage.js ui/*.js; do node --check \"$file\" || exit 1; done",
+    "desktop": "tauri dev",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

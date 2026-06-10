@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dreamweaver Comfy</title>
+  <link rel="stylesheet" href="styles.css?v=0.2.4">
+</head>
+<body>
+  <canvas id="backgroundCanvas" aria-hidden="true"></canvas>
+
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <div>
+        <strong>Dreamweaver</strong>
+        <span>ComfyUI Studio</span>
+      </div>
+    </div>
+    <nav>
+      <button id="comicNav" class="ghost-button">Strip</button>
+      <button id="inputNav" class="ghost-button">Droom</button>
+      <button id="historyNav" class="ghost-button">Historie</button>
+      <button id="settingsNav" class="icon-button" aria-label="Instellingen">⚙</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="comicView" class="view comic-view">
+      <p class="eyebrow">Comic Director</p>
+      <h1>Maak een A4-strip uit je verhaal</h1>
+
+      <form id="comicForm" class="comic-form">
+        <label>
+          Upload tekst
+          <input id="storyFileInput" type="file" accept=".txt,.md,.markdown,.text,.docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+        </label>
+
+        <label for="storyInput">Verhaal</label>
+        <textarea id="storyInput" class="story-textarea" placeholder="Plak hier je verhaal, of upload een tekstbestand."></textarea>
+        <div class="form-row">
+          <span id="storyWordCount">0 / 50.000 woorden</span>
+          <span id="storyEstimate">Nog geen storyboard.</span>
+        </div>
+
+        <div class="settings-grid comic-settings">
+          <label>
+            Stijl
+            <select id="comicStyleSelect">
+              <option value="realistic anime, cinematic graphic novel, grounded human anatomy" selected>Realistische anime</option>
+              <option value="semi-realistic manga, clean line art, cinematic colors">Semi-realistische manga</option>
+              <option value="dark realistic anime, noir lighting, dramatic shadows">Anime noir</option>
+              <option value="soft realistic anime, painterly colors, emotional close-ups">Zachte anime</option>
+            </select>
+          </label>
+          <label>
+            Lokaal model
+            <select id="localComicModelSelect">
+              <option value="auto">Auto</option>
+            </select>
+          </label>
+          <label>
+            Verhaalplanner
+            <select id="cloudModelSelect">
+              <option value="local_rules">Lokaal</option>
+            </select>
+          </label>
+          <label>
+            Panel-formaat
+            <select id="comicSizeSelect">
+              <option value="768x1088" selected>768 x 1088</option>
+              <option value="896x1216">896 x 1216</option>
+              <option value="1024x1024">1024 x 1024</option>
+              <option value="640x896">640 x 896</option>
+            </select>
+          </label>
+          <label>
+            Run
+            <select id="comicRenderModeSelect">
+              <option value="render" selected>Storyboard + render</option>
+              <option value="plan">Alleen storyboard</option>
+            </select>
+          </label>
+        </div>
+
+        <button class="primary-button" type="submit">Maak strip</button>
+      </form>
+
+      <div id="comicJobPanel" class="status-panel comic-job-panel hidden">
+        <div>
+          <strong id="comicJobTitle">Strip voorbereiden</strong>
+          <span id="comicJobDetail">Wacht op analyse.</span>
+        </div>
+        <div class="comic-job-actions">
+          <div class="progress-shell">
+            <div id="comicProgressBar" class="progress-bar"></div>
+          </div>
+          <button id="cancelComicBtn" class="secondary-button" type="button">Stop</button>
+        </div>
+      </div>
+
+      <section id="comicOutput" class="comic-output hidden">
+        <div class="comic-output-header">
+          <div>
+            <h2 id="comicTitle">Storyboard</h2>
+            <p id="comicMeta" class="intro"></p>
+          </div>
+          <button id="exportComicBtn" class="secondary-button" type="button">Print / PDF</button>
+        </div>
+        <div id="storyBible" class="story-bible"></div>
+        <div id="characterBible" class="character-bible"></div>
+        <div id="comicPages" class="comic-pages"></div>
+      </section>
+
+      <div id="comfyPanel" class="status-panel">
+        <div>
+          <strong>ComfyUI</strong>
+          <span id="comfyStatus">Status ophalen...</span>
+        </div>
+        <button id="startComfyBtn" class="secondary-button" type="button">Start ComfyUI</button>
+      </div>
+    </section>
+
+    <section id="inputView" class="view hero-view hidden">
+      <p class="eyebrow">Lokale droomgenerator met ComfyUI</p>
+      <h1>Wat wil je verbeelden?</h1>
+      <p class="intro">
+        Typ een wens, gedachte, droomflard of losse zin. Dreamweaver vertaalt de symboliek naar een subtiele
+        beeldboodschap en gebruikt je lokale ComfyUI-modellen voor Wan-video of Z-Image droombeelden.
+      </p>
+
+      <form id="dreamForm" class="dream-form">
+        <label for="desireInput">Persoonlijke wens</label>
+        <textarea id="desireInput" maxlength="300" placeholder="Bijv. Ik wil me kalm, helder en krachtig voelen"></textarea>
+        <div class="form-row">
+          <span id="charCount">0 / 300</span>
+          <span id="safetyNote">Elke tekst wordt omgezet naar beeldsymboliek; de originele tekst gaat niet naar ComfyUI.</span>
+        </div>
+
+        <div class="settings-grid">
+          <label>
+            Uitvoer
+            <select id="modeSelect">
+              <option value="video">Wan video (5-7 sec)</option>
+              <option value="images">Z-Image slideshow</option>
+            </select>
+          </label>
+          <label>
+            Videomodel
+            <select id="modelSelect">
+              <option value="auto">Auto</option>
+              <option value="wan22_14b">Wan 2.2 14B</option>
+              <option value="wan21_1_3b">Wan 2.1 1.3B</option>
+            </select>
+          </label>
+          <label>
+            Duur
+            <select id="durationSelect">
+              <option value="5">5 sec</option>
+              <option value="6" selected>6 sec</option>
+              <option value="7">7 sec</option>
+            </select>
+          </label>
+          <label>
+            Formaat
+            <select id="sizeSelect">
+              <option value="512x512">512 x 512</option>
+              <option value="640x640">640 x 640</option>
+              <option value="768x768">768 x 768</option>
+            </select>
+          </label>
+        </div>
+
+        <button class="primary-button" type="submit">✦ Dream</button>
+      </form>
+
+      <p class="intro">ComfyUI-status staat in de stripmodus.</p>
+    </section>
+
+    <section id="loadingView" class="view loading-view hidden">
+      <div class="dream-spinner"></div>
+      <h2 id="loadingTitle">Weaving your dream...</h2>
+      <p id="loadingDetail">ComfyUI voorbereiden.</p>
+      <div class="progress-shell">
+        <div id="progressBar" class="progress-bar"></div>
+      </div>
+      <button id="cancelBackBtn" class="ghost-button">Terug</button>
+    </section>
+
+    <section id="playerView" class="view player-view hidden">
+      <div class="player-shell">
+        <video id="dreamVideo" class="dream-video hidden" autoplay loop muted playsinline></video>
+        <canvas id="dreamCanvas" class="dream-canvas hidden"></canvas>
+        <div id="flashOverlay" class="flash-overlay" aria-hidden="true"></div>
+      </div>
+      <div class="player-controls">
+        <button id="pauseBtn" class="secondary-button">Pauze</button>
+        <button id="saveBtn" class="primary-button">Opslaan</button>
+        <button id="newDreamBtn" class="ghost-button">Nieuwe droom</button>
+      </div>
+      <article id="auditPanel" class="audit-panel"></article>
+    </section>
+
+    <section id="historyView" class="view history-view hidden">
+      <h2>Opgeslagen dromen</h2>
+      <div id="historyList" class="history-list"></div>
+    </section>
+  </main>
+
+  <dialog id="settingsDialog" class="settings-dialog">
+    <form method="dialog">
+      <header>
+        <h2>Instellingen</h2>
+        <button class="icon-button" value="cancel" aria-label="Sluiten">×</button>
+      </header>
+      <label>
+        ComfyUI URL
+        <input id="comfyUrlInput" value="http://127.0.0.1:8188" readonly>
+      </label>
+      <p>
+        De URL komt uit de backend-env var <code>COMFYUI_URL</code>. Voor Flatpak is netwerkdeling nodig zodat
+        <code>127.0.0.1:8188</code> bereikbaar is.
+      </p>
+      <button class="primary-button" value="ok">Ok</button>
+    </form>
+  </dialog>
+
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+  <script type="module" src="main.js?v=0.2.4"></script>
+</body>
+</html>
