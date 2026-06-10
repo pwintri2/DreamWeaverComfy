@@ -42,6 +42,7 @@ DEFAULT_COMFY_PATH = Path(os.environ.get("COMFYUI_PATH", "/home/pwintri2/ComfyUI
 DEFAULT_COMFY_URL = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188").rstrip("/")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_PLANNER_TIMEOUT = float(os.environ.get("OLLAMA_PLANNER_TIMEOUT", "180"))
+OLLAMA_PANEL_PROMPT_TIMEOUT = float(os.environ.get("OLLAMA_PANEL_PROMPT_TIMEOUT", "60"))
 JOBS: dict[str, dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
 COMFY_PROCESS: subprocess.Popen[str] | None = None
@@ -2324,14 +2325,75 @@ def absent_character_visual_prompt(character_ids: list[str], characters: list[di
     return "; ".join(parts)
 
 
-def build_panel_negative_prompt(absent_ids: list[str], characters: list[dict[str, Any]]) -> str:
+def build_panel_negative_prompt(
+    absent_ids: list[str],
+    characters: list[dict[str, Any]],
+    present_ids: list[str] | None = None,
+) -> str:
+    # Keep all negations here; diffusion models follow "do not" cues poorly in the positive prompt.
+    parts = [COMIC_NEGATIVE_PROMPT]
     absent_prompt = absent_character_visual_prompt(absent_ids, characters)
-    if not absent_prompt:
-        return COMIC_NEGATIVE_PROMPT
-    return (
-        f"{COMIC_NEGATIVE_PROMPT}, absent/off-screen characters must not appear: {absent_prompt}, "
-        "extra people, background crowd, unwanted companion, duplicate named character"
+    if absent_prompt:
+        parts.append(f"absent or off-screen characters must not appear: {absent_prompt}")
+    parts.append("extra people, background crowd, unwanted companion, duplicate named character")
+    if present_ids is not None and not present_ids:
+        parts.append("people, person, human figure, silhouette, face, crowd")
+    return ", ".join(parts)
+
+
+def llm_panel_visual_prompt(
+    model: str,
+    beat_text: str,
+    scene: dict[str, Any],
+    visible_names: list[str],
+    absent_names: list[str],
+    timeout: float = OLLAMA_PANEL_PROMPT_TIMEOUT,
+) -> str:
+    system_prompt = (
+        "You turn one comic-book story beat into a single compact English image description "
+        "for a text-to-image model. Describe ONLY what is literally visible in this beat. "
+        "Never add characters, objects, places or actions that are not in the text. "
+        "No dialogue, no narration, no story explanation, no quotation marks. Return JSON only."
     )
+    cast_line = ", ".join(visible_names) if visible_names else "no people, empty scene"
+    absent_line = ", ".join(absent_names) if absent_names else "none"
+    schema_hint = {"visual": "one English sentence describing the visible scene, 12-40 words"}
+    user_prompt = (
+        f"Characters who may be visible: {cast_line}\n"
+        f"Characters that must NOT appear: {absent_line}\n"
+        f"Location: {scene.get('location')}\n"
+        f"Mood: {scene.get('mood')}\n"
+        f"JSON schema: {json.dumps(schema_hint, ensure_ascii=False)}\n\n"
+        f"Story beat:\n{trim_text(beat_text, 600)}"
+    )
+    result = ollama_generate_json(model, system_prompt, user_prompt, timeout)
+    visual = text_field(result, ["visual", "description", "prompt"])
+    return trim_text(visual, 420)
+
+
+def grounded_panel_text(
+    engine: dict[str, Any],
+    beat_text: str,
+    scene: dict[str, Any],
+    visible_names: list[str],
+    absent_names: list[str],
+) -> str:
+    # When the LLM planner is active, distil the raw beat into a tight, visual-only prompt.
+    # Any failure or sign of hallucination falls back to the raw beat text.
+    if engine.get("type") != "ollama":
+        return beat_text
+    try:
+        visual = llm_panel_visual_prompt(str(engine.get("model") or ""), beat_text, scene, visible_names, absent_names)
+    except Exception:  # noqa: BLE001
+        return beat_text
+    if word_count(visual) < 3:
+        return beat_text
+    lowered = visual.lower()
+    for name in absent_names:
+        first = name.split()[0].lower() if name.split() else ""
+        if first and re.search(rf"\b{re.escape(first)}\b", lowered):
+            return beat_text
+    return visual
 
 
 def build_panel_prompt(
@@ -2345,27 +2407,21 @@ def build_panel_prompt(
 ) -> str:
     people = character_prompt(character_ids, characters)
     visible_names = character_names(character_ids, characters)
-    absent_names = character_names(absent_ids, characters, 8)
     style_prompt = style or "realistic anime"
     camera = SHOT_SEQUENCE[(panel_index - 1) % len(SHOT_SEQUENCE)]
     if visible_names:
-        cast_rule = f"visible cast: ONLY {', '.join(visible_names)}"
+        cast_rule = f"visible cast: only {', '.join(visible_names)}"
+        character_detail = f"{people}, "
+        human_detail = "expressive faces, natural body language, natural anatomy, correct hands, "
     else:
-        cast_rule = "visible cast: no named characters, empty environment or object-focused shot"
-    absent_rule = f"do not show: {', '.join(absent_names)}" if absent_names else "do not add extra characters"
-    character_detail = f"{people}, " if people else ""
-    human_detail = (
-        "expressive faces, natural body language, "
-        if people
-        else "clear empty space, no people, no silhouettes, no background crowd, "
-    )
+        cast_rule = "empty unoccupied environment, object-focused shot"
+        character_detail = ""
+        human_detail = ""
     return (
-        f"{style_prompt} comic panel, {camera}, show the story event literally: {trim_text(action_text, 420)}, "
-        f"location: {scene['location']}, mood: {scene['mood']}, {cast_rule}, {absent_rule}, "
-        f"{character_detail}coherent environment continuity, {human_detail}"
-        "do not invent additional people, keep identity and gender locked, natural anatomy, correct hands, "
-        "cinematic lighting, detailed background, A4 graphic novel panel, no readable text, "
-        "no speech bubbles, no captions, no watermark"
+        f"{style_prompt} comic panel, {camera}, {trim_text(action_text, 420)}, "
+        f"location: {scene['location']}, mood: {scene['mood']}, {cast_rule}, "
+        f"{character_detail}{human_detail}coherent environment continuity, "
+        "cinematic lighting, detailed background, A4 graphic novel panel"
     )
 
 
@@ -2382,6 +2438,7 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
     sentences = split_sentences(story)
     analysis = build_story_analysis(story, planner_id, job_id)
     characters = list(analysis.get("characters") or [])
+    engine = analysis.get("planner") or {"type": "local_rules"}
     chunks = scene_chunks(story)
     notes = list(analysis.get("notes") or [])
 
@@ -2417,19 +2474,25 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
             absent = ordered_unique([*cast["absent"], *scene["absentCharacterIds"], *[char_id for char_id in all_character_ids if char_id not in present]])
             absent = [char_id for char_id in absent if char_id not in present]
             exiting = list(cast["exiting"])
+            visible_names = character_names(present, characters)
+            absent_names = character_names(absent, characters, 8)
+            if job_id and engine.get("type") == "ollama":
+                job_update(job_id, status="writing_panel_prompts", analysisStage="panel_prompts", currentPanel=panel_number)
+            action_text = grounded_panel_text(engine, beat_text, scene, visible_names, absent_names)
             panel = {
                 "id": f"panel_{panel_number:04d}",
                 "panelNumber": panel_number,
                 "sceneId": scene["id"],
                 "beatNumber": beat_index,
                 "caption": trim_text(beat_text, 190),
+                "visualDescription": action_text if action_text != beat_text else "",
                 "shot": SHOT_SEQUENCE[(panel_number - 1) % len(SHOT_SEQUENCE)],
                 "characterIds": present,
                 "absentCharacterIds": absent,
                 "exitingCharacterIds": exiting,
                 "status": "planned",
-                "prompt": build_panel_prompt(beat_text, scene, present, absent, characters, style, panel_number),
-                "negativePrompt": build_panel_negative_prompt(absent, characters),
+                "prompt": build_panel_prompt(action_text, scene, present, absent, characters, style, panel_number),
+                "negativePrompt": build_panel_negative_prompt(absent, characters, present),
             }
             panels.append(panel)
             scene_panel_ids.append(panel["id"])
@@ -2964,6 +3027,15 @@ def select_comic_model(model_id: str, inventory: dict[str, Any]) -> dict[str, An
     return choice
 
 
+def cast_seed_offset(character_ids: list[str]) -> int:
+    # Same visible cast -> same seed offset, so recurring characters render consistently.
+    if not character_ids:
+        return 0
+    key = "|".join(sorted(str(char_id) for char_id in character_ids))
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return int(digest[:12], 16)
+
+
 def render_comic_panel(
     panel: dict[str, Any],
     payload: dict[str, Any],
@@ -2979,7 +3051,8 @@ def render_comic_panel(
     negative = str(panel.get("negativePrompt") or COMIC_NEGATIVE_PROMPT)
     kind = str(model_choice.get("kind") or "")
     model_id = str(model_choice.get("id") or "auto")
-    panel_seed = seed + int(panel.get("panelNumber") or 0)
+    cast_ids = [str(char_id) for char_id in (panel.get("characterIds") or [])]
+    panel_seed = (seed + cast_seed_offset(cast_ids)) % (2**63 - 1)
 
     if model_id == "zimage_turbo":
         if image is None:

@@ -290,6 +290,7 @@ function renderComicPlan(comic) {
               <summary>Prompt</summary>
               <p><strong>${escapeHtml(panel.shot || "shot")}</strong>${names ? ` · zichtbaar: ${escapeHtml(names)}` : " · geen personages"}</p>
               ${absentNames ? `<p>Afwezig/off-screen: ${escapeHtml(absentNames)}</p>` : ""}
+              ${panel.visualDescription ? `<p><em>Grounded beschrijving:</em> ${escapeHtml(panel.visualDescription)}</p>` : ""}
               <p>${escapeHtml(panel.prompt || "")}</p>
             </details>
           </section>
@@ -313,6 +314,7 @@ function renderComicJob(job) {
     analyzing: "Tekst analyseren, personages en scenes maken.",
     analyzing_story: "Verhaal opdelen en analyse voorbereiden.",
     analyzing_chunk: `Chunk ${job.currentChunk || "?"} van ${job.totalChunks || "?"} analyseren.`,
+    writing_panel_prompts: `Panelprompt ${job.currentPanel || "?"} schrijven (grounded).`,
     planned: "Storyboard en prompts zijn klaar.",
     rendering_comic_panel: `Panel ${job.currentPanel || rendered + 1} van ${total || "?"} renderen.`,
     success: "Klaar.",
