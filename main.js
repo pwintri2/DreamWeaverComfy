@@ -1,4 +1,4 @@
-import { cancelJob, extractDocumentText, getJob, getStatus, regenerateComicPanel, startComic, startComfy, startDream, updateComicPanel } from "./api.js?v=0.2.4";
+import { cancelJob, extractDocumentText, generateCharacterReference, getJob, getStatus, regenerateComicPanel, startComic, startComfy, startDream, updateComicPanel } from "./api.js?v=0.2.4";
 import { setState } from "./state.js?v=0.2.4";
 import { addDream } from "./storage.js?v=0.2.4";
 import { initBackground } from "./ui/background.js?v=0.2.4";
@@ -212,13 +212,22 @@ function renderCharacterBible(characters) {
   target.innerHTML = `
     <h3>Personages</h3>
     <div class="character-grid">
-      ${characters.map((character) => `
+      ${characters.map((character) => {
+        const refStatus = character.referenceStatus || "";
+        const refImage = character.referenceImageUrl
+          ? `<img class="character-ref" src="${escapeHtml(character.referenceImageUrl)}" alt="Referentie ${escapeHtml(character.name)}">`
+          : `<div class="character-ref-placeholder">${refStatus === "rendering" ? "Portret renderen..." : refStatus === "error" ? "Renderen mislukt" : "Geen portret"}</div>`;
+        const refLabel = character.referenceImageUrl ? "Nieuw portret" : "Genereer portret";
+        return `
         <article class="character-card">
           <strong>${escapeHtml(character.name)}</strong>
           <span>${escapeHtml(character.role)} · ${Number(character.mentions || 0)} vermeldingen</span>
+          ${refImage}
           <p>${escapeHtml(character.visualSignature || "")}</p>
+          <button type="button" class="character-ref-btn" data-character-id="${escapeHtml(character.id)}">${refLabel}</button>
         </article>
-      `).join("")}
+      `;
+      }).join("")}
     </div>
   `;
 }
@@ -459,6 +468,44 @@ async function pollPanelRegen(jobId, panelId) {
   throw new Error("Panel renderen duurde te lang.");
 }
 
+async function handleCharacterRefClick(event) {
+  const button = event.target.closest(".character-ref-btn");
+  if (!button) return;
+  if (!comicEditJobId) {
+    showToast("Geen actieve strip om portretten voor te maken.");
+    return;
+  }
+  const characterId = button.dataset.characterId;
+  button.disabled = true;
+  button.textContent = "Renderen...";
+  try {
+    await generateCharacterReference({ jobId: comicEditJobId, characterId });
+    await pollCharacterRef(comicEditJobId, characterId);
+    showToast("Portret klaar.");
+  } catch (error) {
+    showToast(error.message, 6200);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function pollCharacterRef(jobId, characterId) {
+  for (let i = 0; i < 240; i += 1) {
+    const job = await getJob(jobId);
+    const character = (job.comic?.characters || []).find((c) => c.id === characterId);
+    const busy = job.characterBusy === characterId || character?.referenceStatus === "rendering";
+    if (!busy) {
+      if (job.comic) renderComicPlan(job.comic);
+      if (character?.referenceStatus === "error") {
+        throw new Error(job.characterError || "Portret renderen mislukt.");
+      }
+      return job;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error("Portret renderen duurde te lang.");
+}
+
 function payloadFromForm() {
   const [width, height] = document.getElementById("sizeSelect").value.split("x").map(Number);
   return {
@@ -621,6 +668,7 @@ function bindEvents() {
     window.print();
   });
   document.getElementById("comicPages").addEventListener("click", handlePanelEditClick);
+  document.getElementById("characterBible").addEventListener("click", handleCharacterRefClick);
   document.getElementById("startComfyBtn").addEventListener("click", async () => {
     try {
       const result = await startComfy();

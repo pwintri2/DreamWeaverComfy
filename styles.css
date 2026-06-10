@@ -434,6 +434,46 @@ input:focus {
   margin: 0;
 }
 
+.character-ref {
+  width: 100%;
+  border-radius: 6px;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.character-ref-placeholder {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.character-ref-btn {
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(120, 92, 60, 0.5);
+  color: #f8f7f3;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.character-ref-btn:hover {
+  background: rgba(120, 92, 60, 0.7);
+}
+
+.character-ref-btn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
 .comic-pages {
   display: grid;
   gap: 28px;

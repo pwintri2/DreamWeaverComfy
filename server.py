@@ -2404,6 +2404,24 @@ def build_panel_prompt(
     )
 
 
+def build_character_reference_prompt(character: dict[str, Any], style: str) -> str:
+    style_prompt = style or "realistic anime"
+    continuity = str(character.get("continuityPrompt") or character.get("visualSignature") or "")
+    return (
+        f"{style_prompt} character reference portrait of one single person, {continuity}, "
+        "centered, plain neutral studio background, full figure with face clearly visible, "
+        "neutral expression, consistent character design, natural anatomy, correct hands, "
+        "even soft lighting, sharp focus, detailed"
+    )
+
+
+def build_character_reference_negative_prompt() -> str:
+    return (
+        f"{COMIC_NEGATIVE_PROMPT}, multiple people, two people, group, crowd, "
+        "extra characters, background characters, busy background, scenery"
+    )
+
+
 def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None = None) -> dict[str, Any]:
     story = normalize_story_text(story)
     words = word_count(story)
@@ -3249,6 +3267,54 @@ def regenerate_panel_job(job_id: str, panel_id: str, base_seed: int | None = Non
         job_update(job_id, comic=job.get("comic"), panelBusy="", panelError=str(exc), status=prev_status)
 
 
+def find_job_character(job: dict[str, Any], character_id: str) -> dict[str, Any] | None:
+    comic = job.get("comic") or {}
+    for character in comic.get("characters") or []:
+        if str(character.get("id")) == character_id:
+            return character
+    return None
+
+
+def generate_character_reference_job(job_id: str, character_id: str, base_seed: int | None = None) -> None:
+    job = job_get(job_id)
+    if not job:
+        return
+    character = find_job_character(job, character_id)
+    if character is None:
+        job_update(job_id, characterBusy="", characterError=f"Personage {character_id} niet gevonden.")
+        return
+    model_choice = job.get("model") or {}
+    if not model_choice:
+        character["referenceStatus"] = "error"
+        job_update(job_id, comic=job.get("comic"), characterBusy="", characterError="Geen rendermodel bekend voor deze job.")
+        return
+    render_config = job.get("renderConfig") or {}
+    comfy_path = Path(render_config.get("comfyPath") or DEFAULT_COMFY_PATH)
+    wan, image = helpers(comfy_path)
+    style = str((job.get("comic") or {}).get("style") or "realistic anime")
+    seed = base_seed if base_seed is not None else random.randint(1, 2**32 - 1)
+    ref_panel = {
+        "id": f"ref_{character_id}",
+        "panelNumber": 0,
+        "characterIds": [character_id],
+        "prompt": build_character_reference_prompt(character, style),
+        "negativePrompt": build_character_reference_negative_prompt(),
+    }
+    try:
+        comfy_request("/system_stats", timeout=3)
+        character["referenceStatus"] = "rendering"
+        job_update(job_id, comic=job.get("comic"), characterBusy=character_id, characterError="")
+        result = render_comic_panel(ref_panel, render_config, model_choice, comfy_path, image, wan, seed)
+        character["referenceImageUrl"] = result.get("imageUrl")
+        character["referencePrompt"] = ref_panel["prompt"]
+        character["referenceSeed"] = seed
+        character["referenceStatus"] = "ready"
+        job_update(job_id, comic=job.get("comic"), characterBusy="")
+    except Exception as exc:  # noqa: BLE001
+        character["referenceStatus"] = "error"
+        job_update(job_id, comic=job.get("comic"), characterBusy="", characterError=str(exc))
+
+
 def run_dream_job(job_id: str, payload: dict[str, Any]) -> None:
     comfy_path = Path(payload.get("comfyPath") or DEFAULT_COMFY_PATH)
     wan, image = helpers(comfy_path)
@@ -3504,6 +3570,23 @@ class Handler(BaseHTTPRequestHandler):
                 thread = threading.Thread(target=regenerate_panel_job, args=(job_id, panel_id, base_seed), daemon=True)
                 thread.start()
                 self.send_json({"started": True, "jobId": job_id, "panelId": panel_id})
+            elif parsed.path == "/api/comic/character-reference":
+                data = self.read_json()
+                job_id = str(data.get("jobId") or "")
+                character_id = str(data.get("characterId") or "")
+                if not job_get(job_id):
+                    self.send_json({"error": "Job niet gevonden."}, 404)
+                    return
+                raw_seed = data.get("seed")
+                base_seed = None
+                if raw_seed not in (None, ""):
+                    try:
+                        base_seed = max(1, min(2**63 - 1, int(raw_seed)))
+                    except (TypeError, ValueError):
+                        base_seed = None
+                thread = threading.Thread(target=generate_character_reference_job, args=(job_id, character_id, base_seed), daemon=True)
+                thread.start()
+                self.send_json({"started": True, "jobId": job_id, "characterId": character_id})
             elif parsed.path == "/api/cancel-job":
                 data = self.read_json()
                 job_id = str(data.get("jobId") or "")

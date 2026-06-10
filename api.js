@@ -69,3 +69,11 @@ export async function regenerateComicPanel(payload) {
     body: JSON.stringify(payload),
   }));
 }
+
+export async function generateCharacterReference(payload) {
+  return readJson(await fetch("/api/comic/character-reference", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}
