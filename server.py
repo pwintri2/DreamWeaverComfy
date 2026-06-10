@@ -167,77 +167,48 @@ SHOT_SEQUENCE = [
 
 
 MOOD_KEYWORDS = {
-    "dreigend": ["angst", "bang", "dreiging", "gevaar", "donker", "schaduw", "vlucht", "storm"],
-    "intiem": ["fluister", "dichtbij", "liefde", "warm", "stil", "aanraking", "vertrouwen"],
-    "melancholisch": ["verdriet", "verlies", "rouw", "mist", "regen", "alleen", "heimwee"],
-    "energiek": ["rennen", "sprong", "actie", "gevecht", "schreeuw", "explosie", "haast"],
-    "verwonderd": ["licht", "wonder", "ster", "magie", "ontdek", "glans", "poort"],
-    "gespannen": ["stilte", "wacht", "twijfel", "keuze", "geheim", "deur", "stap"],
+    "ominous": ["fear", "afraid", "threat", "danger", "dark", "darkness", "shadow", "flee", "storm", "dread", "angst", "bang", "dreiging", "gevaar", "donker", "schaduw", "vlucht"],
+    "intimate": ["whisper", "close", "love", "warm", "quiet", "touch", "tender", "trust", "embrace", "fluister", "dichtbij", "liefde", "stil", "aanraking", "vertrouwen"],
+    "melancholic": ["sad", "sorrow", "grief", "loss", "mourning", "mist", "rain", "alone", "lonely", "longing", "verdriet", "verlies", "rouw", "regen", "alleen", "heimwee"],
+    "energetic": ["run", "running", "leap", "jump", "action", "fight", "shout", "explosion", "rush", "chase", "rennen", "sprong", "actie", "gevecht", "schreeuw", "haast"],
+    "wondrous": ["light", "wonder", "star", "magic", "discover", "glow", "shimmer", "gate", "licht", "wonder", "ster", "magie", "glans", "poort"],
+    "tense": ["silence", "wait", "waiting", "doubt", "choice", "secret", "door", "step", "stilte", "wacht", "twijfel", "keuze", "geheim", "deur", "stap"],
 }
 
 
 EXIT_KEYWORDS = [
-    "gaat weg",
-    "ging weg",
-    "weggaat",
-    "vertrekt",
-    "vertrok",
-    "verlaat",
-    "verliet",
-    "verdwijnt",
-    "verdween",
-    "loopt weg",
-    "liep weg",
-    "rent weg",
-    "rende weg",
-    "stapt weg",
-    "stapte weg",
-    "vlucht",
-    "vluchtte",
-    "is weg",
-    "was weg",
-    "niet meer zichtbaar",
-    "verdwenen",
+    "walks out", "walked out", "walks away", "walked away", "walks off", "walked off",
+    "leaves", "left", "departs", "departed", "goes away", "went away",
+    "runs away", "ran away", "runs off", "ran off", "steps out", "stepped out",
+    "exits", "exited", "disappears", "disappeared", "vanishes", "vanished",
+    "is gone", "was gone", "no longer visible", "out the door", "out of the room",
+    "gaat weg", "ging weg", "weggaat", "vertrekt", "vertrok", "verlaat", "verliet",
+    "verdwijnt", "verdween", "loopt weg", "liep weg", "rent weg", "rende weg",
+    "stapt weg", "stapte weg", "vlucht", "vluchtte", "is weg", "was weg",
+    "niet meer zichtbaar", "verdwenen",
 ]
 
 
 ABSENCE_KEYWORDS = [
-    "zonder",
-    "niet bij",
-    "niet meer zichtbaar",
-    "niet meer aanwezig",
-    "niet zichtbaar",
-    "niet aanwezig",
-    "is weg",
-    "was weg",
-    "verdwenen",
+    "without", "not with", "no longer visible", "no longer present", "not visible",
+    "not present", "is gone", "was gone", "gone", "absent",
+    "zonder", "niet bij", "niet meer zichtbaar", "niet meer aanwezig",
+    "niet zichtbaar", "niet aanwezig", "is weg", "was weg", "verdwenen",
 ]
 
 ABSENCE_STATE_KEYWORDS = [
-    "niet meer zichtbaar",
-    "niet meer aanwezig",
-    "niet zichtbaar",
-    "niet aanwezig",
-    "is weg",
-    "was weg",
-    "verdwenen",
+    "no longer visible", "no longer present", "not visible", "not present",
+    "is gone", "was gone", "gone", "absent",
+    "niet meer zichtbaar", "niet meer aanwezig", "niet zichtbaar", "niet aanwezig",
+    "is weg", "was weg", "verdwenen",
 ]
 
 EMPTY_SCENE_CUES = [
-    "alleen de kamer",
-    "alleen de straat",
-    "empty",
-    "geen mens",
-    "geen mensen",
-    "geen personage",
-    "geen personages",
-    "leeg",
-    "niemand",
-    "no one",
-    "no people",
-    "no person",
-    "nobody",
-    "verlaten achter",
+    "empty room", "empty street", "empty hallway", "empty space", "empty",
+    "no one", "no one inside", "no people", "no person", "nobody",
+    "abandoned", "deserted", "left behind", "all alone", "alone in the",
+    "alleen de kamer", "alleen de straat", "geen mens", "geen mensen",
+    "geen personage", "geen personages", "leeg", "niemand", "verlaten achter",
 ]
 
 FIRST_PERSON_WORDS = {"i", "ik", "me", "mij", "mijn"}
@@ -1224,7 +1195,7 @@ def build_character_cards(text: str, sentences: list[str]) -> list[dict[str, Any
     if not names:
         if not story_has_human_signal(text):
             return []
-        fallback = "Ik-figuur" if re.search(r"\b(?:ik|i)\b", text, re.IGNORECASE) else "Hoofdpersoon"
+        fallback = "Narrator" if re.search(r"\b(?:ik|i)\b", text, re.IGNORECASE) else "Protagonist"
         names = [(fallback, 1)]
 
     cards: list[dict[str, Any]] = []
@@ -1235,7 +1206,7 @@ def build_character_cards(text: str, sentences: list[str]) -> list[dict[str, Any
             f"{stable_pick(name, OUTFIT_OPTIONS, 2)}, "
             f"{stable_pick(name, MARKER_OPTIONS, 3)}"
         )
-        role = "hoofdpersoon" if index == 1 else ("belangrijk personage" if mentions >= 4 else "bijpersonage")
+        role = "protagonist" if index == 1 else ("main character" if mentions >= 4 else "supporting character")
         cards.append(
             {
                 "id": f"char_{index:02d}",
@@ -1309,25 +1280,33 @@ def scene_chunks(text: str) -> list[list[str]]:
 
 def detect_location(text: str) -> str:
     pattern = re.compile(
-        r"\b(?:in|op|bij|aan|onder|boven|naast|voor|achter|door)\s+(?:de|het|een|den|der)?\s*([A-Za-zÀ-ÿ][^,.!?;:\n]{2,44})",
+        r"\b(?:in|on|at|by|under|above|beside|near|inside|outside|into|through|across|within|"
+        r"op|bij|aan|onder|boven|naast|voor|achter|door)\s+(?:the|a|an|de|het|een|den|der)?\s*"
+        r"([A-Za-zÀ-ÿ][^,.!?;:\n]{2,44})",
         re.IGNORECASE,
     )
-    pronouns = {"haar", "hem", "hen", "hun", "mij", "me", "jou", "ons", "zijn", "ze", "hij"}
+    pronouns = {
+        "he", "him", "his", "she", "her", "hers", "they", "them", "their", "us", "you", "it",
+        "haar", "hem", "hen", "hun", "mij", "me", "jou", "ons", "zijn", "ze", "hij",
+    }
     for match in pattern.finditer(text):
         candidate = trim_text(match.group(1), 56).lower()
         first = candidate.split()[0] if candidate.split() else ""
-        if first not in pronouns:
+        if first and first not in pronouns:
             return candidate
     lower = text.lower()
-    if "bos" in lower:
-        return "bos"
-    if "stad" in lower:
-        return "stad"
-    if "kamer" in lower or "huis" in lower:
-        return "interieur"
-    if "straat" in lower:
-        return "straat"
-    return "de belangrijkste plek van deze scene"
+    for needle, label in [
+        ("forest", "forest"), ("wood", "forest"), ("city", "city"), ("town", "town"),
+        ("kitchen", "kitchen"), ("hallway", "hallway"), ("corridor", "hallway"),
+        ("bedroom", "bedroom"), ("room", "interior"), ("house", "house interior"),
+        ("street", "street"), ("road", "road"), ("garden", "garden"), ("station", "station"),
+        ("bridge", "bridge"), ("beach", "beach"), ("mountain", "mountain"),
+        ("bos", "forest"), ("stad", "city"), ("kamer", "interior"), ("huis", "house interior"),
+        ("straat", "street"),
+    ]:
+        if needle in lower:
+            return label
+    return "the main setting of this scene"
 
 
 def detect_mood(text: str) -> str:
@@ -1338,7 +1317,7 @@ def detect_mood(text: str) -> str:
         if score:
             scores.append((score, mood))
     if not scores:
-        return "filmisch"
+        return "cinematic"
     scores.sort(reverse=True)
     return scores[0][1]
 
@@ -1349,7 +1328,7 @@ def mentioned_character_ids(text: str, characters: list[dict[str, Any]]) -> list
     words = lower_word_set(text)
     for character in characters:
         name = str(character["name"])
-        if name in {"Ik-figuur", "Hoofdpersoon"} and words & FIRST_PERSON_WORDS:
+        if name in {"Narrator", "Protagonist"} and words & FIRST_PERSON_WORDS:
             matches.append((0, str(character["id"])))
             continue
         match = re.search(rf"\b{re.escape(name.lower())}\b", lower)
@@ -1804,21 +1783,21 @@ def sanitize_character_candidate_name(name: str, story_text: str) -> str | None:
         return None
     lower = cleaned.lower()
     if lower in {"narrator", "verteller", "ik", "i", "me", "mij"}:
-        return "Ik-figuur" if lower_word_set(story_text) & FIRST_PERSON_WORDS else None
+        return "Narrator" if lower_word_set(story_text) & FIRST_PERSON_WORDS else None
     if len(cleaned) > 70 or len(cleaned.split()) > 4:
         return None
     if not re.search(r"[A-Za-zÀ-ÿ]", cleaned):
         return None
     if name_candidate_blocked(cleaned):
         return None
-    if cleaned != "Ik-figuur" and not cleaned[:1].isupper():
+    if cleaned != "Narrator" and not cleaned[:1].isupper():
         return None
 
     parts = [part for part in re.findall(r"[A-Za-zÀ-ÿ'-]+", cleaned) if part]
     if not parts:
         return None
     first = parts[0]
-    if cleaned != "Ik-figuur" and not re.search(rf"\b{re.escape(first)}\b", story_text, re.IGNORECASE):
+    if cleaned != "Narrator" and not re.search(rf"\b{re.escape(first)}\b", story_text, re.IGNORECASE):
         return None
     return cleaned
 
@@ -1842,7 +1821,7 @@ def rule_story_chunk_analysis(chunk: dict[str, Any]) -> dict[str, Any]:
     if not character_candidates and lower_word_set(text) & FIRST_PERSON_WORDS:
         character_candidates.append(
             {
-                "name": "Ik-figuur",
+                "name": "Narrator",
                 "mentions": 1,
                 "gender": "unknown",
                 "visualClues": "",
@@ -1922,7 +1901,7 @@ def llm_story_chunk_analysis(model: str, chunk: dict[str, Any], known_names: lis
         "summary": "korte samenvatting van dit stuk",
         "characters": [
             {
-                "name": "exacte naam of Ik-figuur",
+                "name": "exacte naam of Narrator",
                 "aliases": ["optioneel"],
                 "gender": "female|male|nonbinary|unknown",
                 "visualClues": "alleen als tekst bewijs geeft",
@@ -2056,7 +2035,7 @@ def analyze_story_chunk(chunk: dict[str, Any], engine: dict[str, Any], known_nam
 
 def character_group_key(name: str) -> str:
     lower = canonical_element_key(name)
-    if lower in {"ik-figuur", "hoofdpersoon"}:
+    if lower in {"narrator", "protagonist"}:
         return lower
     first = lower.split()[0] if lower.split() else lower
     return first or lower
@@ -2067,11 +2046,11 @@ def count_name_mentions(text: str, aliases: list[str]) -> int:
     seen = set()
     for alias in aliases:
         clean = alias.strip()
-        if not clean or clean.lower() in seen or clean in {"Ik-figuur", "Hoofdpersoon"}:
+        if not clean or clean.lower() in seen or clean in {"Narrator", "Protagonist"}:
             continue
         seen.add(clean.lower())
         total += len(re.findall(rf"\b{re.escape(clean)}\b", text, re.IGNORECASE))
-    if any(alias in {"Ik-figuur", "Hoofdpersoon"} for alias in aliases):
+    if any(alias in {"Narrator", "Protagonist"} for alias in aliases):
         total += len(lower_word_set(text) & FIRST_PERSON_WORDS)
     return total
 
@@ -2079,7 +2058,7 @@ def count_name_mentions(text: str, aliases: list[str]) -> int:
 def first_name_position(text: str, aliases: list[str]) -> int:
     positions = []
     for alias in aliases:
-        if alias in {"Ik-figuur", "Hoofdpersoon"}:
+        if alias in {"Narrator", "Protagonist"}:
             first_person_matches = [match.start() for match in re.finditer(r"\b(?:ik|i|me|mij)\b", text, re.IGNORECASE)]
             positions.extend(first_person_matches)
             continue
@@ -2144,7 +2123,7 @@ def merge_character_cards(story: str, sentences: list[str], chunk_analyses: list
                 add_candidate(candidate, chunk_number)
 
     if not groups and story_has_human_signal(story):
-        fallback = "Ik-figuur" if lower_word_set(story) & FIRST_PERSON_WORDS else "Hoofdpersoon"
+        fallback = "Narrator" if lower_word_set(story) & FIRST_PERSON_WORDS else "Protagonist"
         add_candidate({"name": fallback, "mentions": 1, "evidence": important_event_sentences(sentences, 3)})
 
     cards: list[dict[str, Any]] = []
@@ -2173,7 +2152,7 @@ def merge_character_cards(story: str, sentences: list[str], chunk_analyses: list
         )
         role = next((role for role in group["roles"] if role), "")
         if not role:
-            role = "hoofdpersoon" if index == 1 else ("belangrijk personage" if mentions >= 4 else "bijpersonage")
+            role = "protagonist" if index == 1 else ("main character" if mentions >= 4 else "supporting character")
         gender_prompt = {
             "female": "female character, gender locked as female, ",
             "male": "male character, gender locked as male, ",
