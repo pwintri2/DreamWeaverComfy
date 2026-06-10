@@ -3130,6 +3130,13 @@ def run_comic_job(job_id: str, payload: dict[str, Any]) -> None:
         inventory = scan_models(comfy_path)
         seed = bounded_int(payload.get("seed"), random.randint(1, 2**32 - 1), 1, 2**63 - 1)
         model_choice = select_comic_model(str(payload.get("localModel") or "auto"), inventory)
+        render_config = {
+            "comfyPath": str(comfy_path),
+            "width": payload.get("width"),
+            "height": payload.get("height"),
+            "steps": payload.get("steps"),
+            "cfg": payload.get("cfg"),
+        }
         job_update(
             job_id,
             status="planned",
@@ -3137,6 +3144,7 @@ def run_comic_job(job_id: str, payload: dict[str, Any]) -> None:
             inventory=inventory,
             model=model_choice,
             seed=seed,
+            renderConfig=render_config,
             totalPanels=comic["panelCount"],
             renderedPanels=0,
         )
@@ -3181,6 +3189,64 @@ def run_comic_job(job_id: str, payload: dict[str, Any]) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         job_update(job_id, done=True, status="error", error=str(exc))
+
+
+def find_job_panel(job: dict[str, Any], panel_id: str) -> dict[str, Any] | None:
+    comic = job.get("comic") or {}
+    for panel in comic.get("panels") or []:
+        if str(panel.get("id")) == panel_id:
+            return panel
+    return None
+
+
+def update_comic_panel(job_id: str, panel_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+    job = job_get(job_id)
+    if not job:
+        raise ValueError("Job niet gevonden.")
+    panel = find_job_panel(job, panel_id)
+    if panel is None:
+        raise ValueError(f"Panel {panel_id} niet gevonden.")
+    if "prompt" in fields:
+        panel["prompt"] = trim_text(str(fields.get("prompt") or ""), 2000)
+    if "negativePrompt" in fields:
+        panel["negativePrompt"] = trim_text(str(fields.get("negativePrompt") or ""), 2000)
+    if "caption" in fields:
+        panel["caption"] = trim_text(str(fields.get("caption") or ""), 400)
+    panel["edited"] = True
+    job_update(job_id, comic=job.get("comic"))
+    return panel
+
+
+def regenerate_panel_job(job_id: str, panel_id: str, base_seed: int | None = None) -> None:
+    job = job_get(job_id)
+    if not job:
+        return
+    panel = find_job_panel(job, panel_id)
+    if panel is None:
+        job_update(job_id, panelError=f"Panel {panel_id} niet gevonden.", panelBusy="")
+        return
+    model_choice = job.get("model") or {}
+    if not model_choice:
+        panel["status"] = "error"
+        job_update(job_id, comic=job.get("comic"), panelBusy="", panelError="Geen rendermodel bekend voor deze job.")
+        return
+    render_config = job.get("renderConfig") or {}
+    comfy_path = Path(render_config.get("comfyPath") or DEFAULT_COMFY_PATH)
+    wan, image = helpers(comfy_path)
+    seed = base_seed if base_seed is not None else random.randint(1, 2**32 - 1)
+    prev_status = job.get("status") or "success"
+    try:
+        comfy_request("/system_stats", timeout=3)
+        panel["status"] = "rendering"
+        job_update(job_id, comic=job.get("comic"), panelBusy=panel_id, panelError="")
+        result = render_comic_panel(panel, render_config, model_choice, comfy_path, image, wan, seed)
+        panel.update(result)
+        panel["status"] = "success"
+        panel["seedBase"] = seed
+        job_update(job_id, comic=job.get("comic"), panelBusy="", status=prev_status)
+    except Exception as exc:  # noqa: BLE001
+        panel["status"] = "error"
+        job_update(job_id, comic=job.get("comic"), panelBusy="", panelError=str(exc), status=prev_status)
 
 
 def run_dream_job(job_id: str, payload: dict[str, Any]) -> None:
@@ -3414,6 +3480,30 @@ class Handler(BaseHTTPRequestHandler):
                 thread = threading.Thread(target=run_comic_job, args=(job_id, data), daemon=True)
                 thread.start()
                 self.send_json({"jobId": job_id})
+            elif parsed.path == "/api/comic/update-panel":
+                data = self.read_json()
+                job_id = str(data.get("jobId") or "")
+                panel_id = str(data.get("panelId") or "")
+                fields = {key: data[key] for key in ("prompt", "negativePrompt", "caption") if key in data}
+                panel = update_comic_panel(job_id, panel_id, fields)
+                self.send_json({"panel": panel})
+            elif parsed.path == "/api/comic/regenerate-panel":
+                data = self.read_json()
+                job_id = str(data.get("jobId") or "")
+                panel_id = str(data.get("panelId") or "")
+                if not job_get(job_id):
+                    self.send_json({"error": "Job niet gevonden."}, 404)
+                    return
+                raw_seed = data.get("seed")
+                base_seed: int | None = None
+                if raw_seed not in (None, ""):
+                    try:
+                        base_seed = max(1, min(2**63 - 1, int(raw_seed)))
+                    except (TypeError, ValueError):
+                        base_seed = None
+                thread = threading.Thread(target=regenerate_panel_job, args=(job_id, panel_id, base_seed), daemon=True)
+                thread.start()
+                self.send_json({"started": True, "jobId": job_id, "panelId": panel_id})
             elif parsed.path == "/api/cancel-job":
                 data = self.read_json()
                 job_id = str(data.get("jobId") or "")

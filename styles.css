@@ -598,6 +598,59 @@ input:focus {
   margin: 7px 0 0;
 }
 
+.panel-prompt-label {
+  display: block;
+  margin: 8px 0 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.72;
+}
+
+.panel-prompt-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #f8f7f3;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  padding: 5px 6px;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.panel-actions button {
+  flex: 1;
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8f7f3;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.panel-actions button:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.panel-actions button:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.panel-regen {
+  background: rgba(120, 92, 60, 0.55);
+}
+
 .progress-bar {
   width: 12%;
   height: 100%;

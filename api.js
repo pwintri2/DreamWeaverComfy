@@ -53,3 +53,19 @@ export async function cancelJob(jobId) {
 export async function getJob(jobId) {
   return readJson(await fetch(`/api/jobs/${encodeURIComponent(jobId)}`));
 }
+
+export async function updateComicPanel(payload) {
+  return readJson(await fetch("/api/comic/update-panel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}
+
+export async function regenerateComicPanel(payload) {
+  return readJson(await fetch("/api/comic/regenerate-panel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}

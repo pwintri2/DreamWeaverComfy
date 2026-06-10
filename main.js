@@ -1,4 +1,4 @@
-import { cancelJob, extractDocumentText, getJob, getStatus, startComic, startComfy, startDream } from "./api.js?v=0.2.4";
+import { cancelJob, extractDocumentText, getJob, getStatus, regenerateComicPanel, startComic, startComfy, startDream, updateComicPanel } from "./api.js?v=0.2.4";
 import { setState } from "./state.js?v=0.2.4";
 import { addDream } from "./storage.js?v=0.2.4";
 import { initBackground } from "./ui/background.js?v=0.2.4";
@@ -24,6 +24,7 @@ const loadingMessages = [
 
 let currentDream = null;
 let currentComicJobId = null;
+let comicEditJobId = null;
 let loadingInterval = null;
 let loadingIndex = 0;
 
@@ -287,11 +288,18 @@ function renderComicPlan(comic) {
             <div class="panel-art">${image}</div>
             <div class="panel-caption">${escapeHtml(panel.caption || "")}</div>
             <details class="panel-details">
-              <summary>Prompt</summary>
+              <summary>Prompt bewerken</summary>
               <p><strong>${escapeHtml(panel.shot || "shot")}</strong>${names ? ` · zichtbaar: ${escapeHtml(names)}` : " · geen personages"}</p>
               ${absentNames ? `<p>Afwezig/off-screen: ${escapeHtml(absentNames)}</p>` : ""}
               ${panel.visualDescription ? `<p><em>Grounded beschrijving:</em> ${escapeHtml(panel.visualDescription)}</p>` : ""}
-              <p>${escapeHtml(panel.prompt || "")}</p>
+              <label class="panel-prompt-label">Positieve prompt</label>
+              <textarea class="panel-prompt-input" data-field="prompt" data-panel-id="${escapeHtml(panel.id)}" rows="4">${escapeHtml(panel.prompt || "")}</textarea>
+              <label class="panel-prompt-label">Negatieve prompt</label>
+              <textarea class="panel-prompt-input" data-field="negativePrompt" data-panel-id="${escapeHtml(panel.id)}" rows="2">${escapeHtml(panel.negativePrompt || "")}</textarea>
+              <div class="panel-actions">
+                <button type="button" class="panel-save" data-panel-id="${escapeHtml(panel.id)}">Bewaar prompt</button>
+                <button type="button" class="panel-regen" data-panel-id="${escapeHtml(panel.id)}">Regenereer panel</button>
+              </div>
             </details>
           </section>
         `;
@@ -391,6 +399,66 @@ async function pollComicJob(jobId) {
   }
 }
 
+function panelPromptInputs(panelId) {
+  const fields = {};
+  document.querySelectorAll(`.panel-prompt-input[data-panel-id="${CSS.escape(panelId)}"]`).forEach((el) => {
+    fields[el.dataset.field] = el.value;
+  });
+  return fields;
+}
+
+async function handlePanelEditClick(event) {
+  const saveBtn = event.target.closest(".panel-save");
+  const regenBtn = event.target.closest(".panel-regen");
+  if (!saveBtn && !regenBtn) return;
+  if (!comicEditJobId) {
+    showToast("Geen actieve strip om te bewerken.");
+    return;
+  }
+  const button = saveBtn || regenBtn;
+  const panelId = button.dataset.panelId;
+  const fields = panelPromptInputs(panelId);
+  button.disabled = true;
+  try {
+    await updateComicPanel({
+      jobId: comicEditJobId,
+      panelId,
+      prompt: fields.prompt,
+      negativePrompt: fields.negativePrompt,
+    });
+    if (saveBtn) {
+      showToast("Prompt bewaard.");
+      return;
+    }
+    regenBtn.textContent = "Renderen...";
+    await regenerateComicPanel({ jobId: comicEditJobId, panelId });
+    await pollPanelRegen(comicEditJobId, panelId);
+    showToast("Panel opnieuw gerenderd.");
+  } catch (error) {
+    showToast(error.message, 6200);
+  } finally {
+    button.disabled = false;
+    if (regenBtn) regenBtn.textContent = "Regenereer panel";
+  }
+}
+
+async function pollPanelRegen(jobId, panelId) {
+  for (let i = 0; i < 240; i += 1) {
+    const job = await getJob(jobId);
+    const panel = (job.comic?.panels || []).find((p) => p.id === panelId);
+    const busy = job.panelBusy === panelId || panel?.status === "rendering";
+    if (!busy) {
+      if (job.comic) renderComicPlan(job.comic);
+      if (panel?.status === "error") {
+        throw new Error(job.panelError || "Panel renderen mislukt.");
+      }
+      return job;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error("Panel renderen duurde te lang.");
+}
+
 function payloadFromForm() {
   const [width, height] = document.getElementById("sizeSelect").value.split("x").map(Number);
   return {
@@ -469,6 +537,7 @@ async function handleComicSubmit(event) {
   try {
     const { jobId } = await startComic(payload);
     currentComicJobId = jobId;
+    comicEditJobId = jobId;
     const job = await pollComicJob(jobId);
     renderComicJob(job);
     showToast(payload.renderMode === "plan" ? "Storyboard klaar." : "Strip klaar.");
@@ -551,6 +620,7 @@ function bindEvents() {
   document.getElementById("exportComicBtn").addEventListener("click", () => {
     window.print();
   });
+  document.getElementById("comicPages").addEventListener("click", handlePanelEditClick);
   document.getElementById("startComfyBtn").addEventListener("click", async () => {
     try {
       const result = await startComfy();
