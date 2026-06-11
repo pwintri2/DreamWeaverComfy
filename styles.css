@@ -434,6 +434,17 @@ input:focus {
   margin: 0;
 }
 
+.story-summary {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .character-ref {
   width: 100%;
   border-radius: 6px;

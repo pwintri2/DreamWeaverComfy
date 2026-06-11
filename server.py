@@ -83,6 +83,10 @@ NON_CHARACTER_NAME_WORDS = {
     "opens", "outside", "over", "paper", "phone", "room", "shadow", "sky", "something", "stairs",
     "street", "table", "that", "the", "then", "there", "thing", "this", "through", "to", "today",
     "tomorrow", "under", "up", "wall", "window", "with", "without",
+    "are", "was", "were", "been", "being", "does", "did", "will", "would", "can", "could", "shall",
+    "should", "may", "might", "must", "have", "has", "had", "why", "what", "when", "where", "who",
+    "whom", "whose", "which", "how", "come", "comes", "goes", "let", "lets", "please", "yes",
+    "okay", "sure", "maybe", "perhaps", "well", "hey", "hello", "wait", "stop", "really", "sorry",
     "actie", "achter", "alles", "appartement", "bank", "bed", "boek", "boven", "brief", "brug", "deur",
     "ding", "dingen", "gang", "gebouw", "gisteren", "huis", "kamer", "keuken", "kijk", "kijkt", "kijken",
     "klok", "licht", "lucht", "maan", "morgen", "muur", "nacht", "niets", "nu", "onder", "poort",
@@ -1892,39 +1896,39 @@ def ollama_generate_json(model: str, system_prompt: str, user_prompt: str, timeo
 
 def llm_story_chunk_analysis(model: str, chunk: dict[str, Any], known_names: list[str]) -> dict[str, Any]:
     system_prompt = (
-        "Je bent een strenge stripverhaal-planner. Geef alleen geldig JSON terug. "
-        "Noem als personage alleen echte personen/dieren/wezen die in deze tekst aanwezig zijn. "
-        "Dingen, plekken, handelingen en losse woorden zijn nooit personages. "
-        "Gebruik korte, concrete visuele feiten en verzin geen nieuwe plot."
+        "You are a strict comic-book story planner. Return valid JSON only. "
+        "As a character, list only real persons/animals/beings actually present in this text. "
+        "Objects, places, actions and stray words are never characters. "
+        "Use short, concrete visual facts and never invent new plot."
     )
     schema_hint = {
-        "summary": "korte samenvatting van dit stuk",
+        "summary": "short summary of this passage",
         "characters": [
             {
-                "name": "exacte naam of Narrator",
-                "aliases": ["optioneel"],
+                "name": "exact name or Narrator",
+                "aliases": ["optional"],
                 "gender": "female|male|nonbinary|unknown",
-                "visualClues": "alleen als tekst bewijs geeft",
-                "role": "korte rol",
-                "evidence": ["korte tekstflard"],
+                "visualClues": "only if the text gives evidence",
+                "role": "short role",
+                "evidence": ["short text snippet"],
             }
         ],
-        "locations": [{"name": "plek", "evidence": "tekstbewijs"}],
-        "objects": [{"name": "belangrijk object", "evidence": "tekstbewijs"}],
+        "locations": [{"name": "place", "evidence": "text evidence"}],
+        "objects": [{"name": "important object", "evidence": "text evidence"}],
         "events": [
             {
-                "summary": "zichtbare gebeurtenis",
-                "visibleCharacters": ["namen die echt in beeld horen"],
-                "absentCharacters": ["namen die expliciet weg/niet zichtbaar zijn"],
-                "location": "plek",
-                "mood": "stemming",
+                "summary": "visible event",
+                "visibleCharacters": ["names that truly belong on screen"],
+                "absentCharacters": ["names explicitly gone/not visible"],
+                "location": "place",
+                "mood": "mood",
             }
         ],
     }
     user_prompt = (
-        f"Bekende namen tot nu toe: {', '.join(known_names[:24]) or 'geen'}\n"
-        f"JSON schema voorbeeld: {json.dumps(schema_hint, ensure_ascii=False)}\n\n"
-        f"Analyseer chunk {chunk.get('chunkNumber')} met {chunk.get('wordCount')} woorden:\n"
+        f"Known names so far: {', '.join(known_names[:24]) or 'none'}\n"
+        f"JSON schema example: {json.dumps(schema_hint, ensure_ascii=False)}\n\n"
+        f"Analyze chunk {chunk.get('chunkNumber')} with {chunk.get('wordCount')} words:\n"
         f"{chunk.get('text')}"
     )
     return ollama_generate_json(model, system_prompt, user_prompt)
@@ -2326,24 +2330,33 @@ def llm_panel_visual_prompt(
     scene: dict[str, Any],
     visible_names: list[str],
     absent_names: list[str],
+    story_context: str = "",
     timeout: float = OLLAMA_PANEL_PROMPT_TIMEOUT,
 ) -> str:
     system_prompt = (
         "You turn one comic-book story beat into a single compact English image description "
         "for a text-to-image model. Describe ONLY what is literally visible in this beat. "
-        "Never add characters, objects, places or actions that are not in the text. "
+        "Use the story context and scene summary ONLY to resolve pronouns and ambiguity; "
+        "never copy events from them into this panel. "
+        "Never add characters, objects, places or actions that are not in this beat. "
         "No dialogue, no narration, no story explanation, no quotation marks. Return JSON only."
     )
     cast_line = ", ".join(visible_names) if visible_names else "no people, empty scene"
     absent_line = ", ".join(absent_names) if absent_names else "none"
     schema_hint = {"visual": "one English sentence describing the visible scene, 12-40 words"}
+    context_lines = ""
+    if story_context.strip():
+        context_lines += f"Story context (do NOT draw this, only for disambiguation): {trim_text(story_context, 500)}\n"
+    if str(scene.get("summary") or "").strip():
+        context_lines += f"Scene summary (do NOT draw this, only for disambiguation): {trim_text(str(scene.get('summary')), 300)}\n"
     user_prompt = (
+        f"{context_lines}"
         f"Characters who may be visible: {cast_line}\n"
         f"Characters that must NOT appear: {absent_line}\n"
         f"Location: {scene.get('location')}\n"
         f"Mood: {scene.get('mood')}\n"
         f"JSON schema: {json.dumps(schema_hint, ensure_ascii=False)}\n\n"
-        f"Story beat:\n{trim_text(beat_text, 600)}"
+        f"Story beat (draw ONLY this):\n{trim_text(beat_text, 600)}"
     )
     result = ollama_generate_json(model, system_prompt, user_prompt, timeout)
     visual = text_field(result, ["visual", "description", "prompt"])
@@ -2356,13 +2369,16 @@ def grounded_panel_text(
     scene: dict[str, Any],
     visible_names: list[str],
     absent_names: list[str],
+    story_context: str = "",
 ) -> str:
     # When the LLM planner is active, distil the raw beat into a tight, visual-only prompt.
     # Any failure or sign of hallucination falls back to the raw beat text.
     if engine.get("type") != "ollama":
         return beat_text
     try:
-        visual = llm_panel_visual_prompt(str(engine.get("model") or ""), beat_text, scene, visible_names, absent_names)
+        visual = llm_panel_visual_prompt(
+            str(engine.get("model") or ""), beat_text, scene, visible_names, absent_names, story_context
+        )
     except Exception:  # noqa: BLE001
         return beat_text
     if word_count(visual) < 3:
@@ -2422,6 +2438,108 @@ def build_character_reference_negative_prompt() -> str:
     )
 
 
+SAID_VERBS = (
+    "said|says|asked|asks|replied|replies|answered|answers|whispered|whispers|"
+    "shouted|shouts|yelled|yells|cried|cries|muttered|mutters|murmured|murmurs|"
+    "exclaimed|added|continued|called|calls|responded|responds|told|tells|"
+    "began|wondered|growled|snapped|sighed|laughed|hissed|smiled|grinned|chuckled|beamed"
+)
+
+DIALOGUE_QUOTE_RE = re.compile(
+    r'"([^"\n]{1,300})"'
+    r'|\u201c([^\u201d\n]{1,300})\u201d'
+    r'|\u201e([^\u201c\u201d"\n]{1,300})[\u201c\u201d"]'
+)
+
+
+def _dialogue_name_map(characters: list[dict[str, Any]]) -> dict[str, tuple[str, str]]:
+    name_map: dict[str, tuple[str, str]] = {}
+    for character in characters:
+        names = [character.get("name"), *(character.get("aliases") or [])]
+        for raw in names:
+            token = str(raw or "").split()
+            if not token:
+                continue
+            first = token[0].lower()
+            if first and first not in name_map:
+                name_map[first] = (str(character.get("id") or ""), str(character.get("name") or raw))
+    return name_map
+
+
+_DIALOGUE_ATTRIBUTION_PATTERNS = (
+    rf"\b([a-z][\w'-]+)\s+(?:[\w'-]+\s+){{0,3}}(?:{SAID_VERBS})\b",
+    rf"\b(?:{SAID_VERBS})\s+([a-z][\w'-]+)\b",
+    rf"\b([a-z][\w'-]+)\s*:",
+)
+
+
+def _dialogue_speaker(before: str, after: str, name_map: dict[str, tuple[str, str]]) -> tuple[str, str] | None:
+    # Pick the attribution physically closest to the quote, whether it sits just before
+    # ("Name said, '...'") or just after ("'...,' Name said"). Distance breaks ties so a
+    # neighbouring quote's tag does not steal this line.
+    candidates: list[tuple[int, tuple[str, str]]] = []
+    before_lower = before.lower()
+    after_lower = after.lower()
+    for pattern in _DIALOGUE_ATTRIBUTION_PATTERNS:
+        for match in re.finditer(pattern, before_lower):
+            if match.group(1) in name_map:
+                candidates.append((len(before) - match.end(), name_map[match.group(1)]))
+        for match in re.finditer(pattern, after_lower):
+            if match.group(1) in name_map:
+                candidates.append((match.start(), name_map[match.group(1)]))
+    if not candidates:
+        return None
+    gap, speaker = min(candidates, key=lambda item: item[0])
+    return speaker if gap <= 40 else None
+
+
+def extract_dialogue(text: str, characters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    name_map = _dialogue_name_map(characters)
+    results: list[dict[str, Any]] = []
+    last_speaker: tuple[str, str] | None = None
+    for match in DIALOGUE_QUOTE_RE.finditer(text):
+        line = next((group for group in match.groups() if group), "").strip().rstrip(" ,;:")
+        if len(line) < 2:
+            continue
+        before = text[max(0, match.start() - 64):match.start()]
+        after = text[match.end():match.end() + 64]
+        speaker = _dialogue_speaker(before, after, name_map)
+        if speaker is None:
+            speaker = last_speaker
+        if speaker is not None:
+            last_speaker = speaker
+        results.append(
+            {
+                "speakerId": speaker[0] if speaker else "",
+                "speaker": speaker[1] if speaker else "",
+                "line": trim_text(line, 240),
+            }
+        )
+    return results
+
+
+def build_global_story_summary(engine: dict[str, Any], chunk_analyses: list[dict[str, Any]]) -> str:
+    summaries = [str(analysis.get("summary") or "") for analysis in chunk_analyses if analysis.get("summary")]
+    joined = " ".join(summary for summary in summaries if summary).strip()
+    if engine.get("type") != "ollama" or not joined:
+        return trim_text(joined, 600)
+    try:
+        system_prompt = (
+            "You summarize a story for a comic planner. Be factual, neutral and concise. "
+            "Do not invent events. Return JSON only."
+        )
+        schema_hint = {"summary": "3-5 sentences: who the main characters are, their relationships, and the overall arc"}
+        user_prompt = (
+            f"JSON schema: {json.dumps(schema_hint, ensure_ascii=False)}\n\n"
+            f"Chunk summaries in order:\n{trim_text(joined, 4000)}"
+        )
+        result = ollama_generate_json(str(engine.get("model") or ""), system_prompt, user_prompt)
+        summary = text_field(result, ["summary", "samenvatting"])
+        return trim_text(summary, 700) if word_count(summary) >= 5 else trim_text(joined, 600)
+    except Exception:  # noqa: BLE001
+        return trim_text(joined, 600)
+
+
 def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None = None) -> dict[str, Any]:
     story = normalize_story_text(story)
     words = word_count(story)
@@ -2436,6 +2554,9 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
     analysis = build_story_analysis(story, planner_id, job_id)
     characters = list(analysis.get("characters") or [])
     engine = analysis.get("planner") or {"type": "local_rules"}
+    if job_id and engine.get("type") == "ollama":
+        job_update(job_id, status="analyzing_story", analysisStage="synthesis")
+    global_summary = build_global_story_summary(engine, list(analysis.get("chunks") or []))
     chunks = scene_chunks(story)
     notes = list(analysis.get("notes") or [])
 
@@ -2475,7 +2596,7 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
             absent_names = character_names(absent, characters, 8)
             if job_id and engine.get("type") == "ollama":
                 job_update(job_id, status="writing_panel_prompts", analysisStage="panel_prompts", currentPanel=panel_number)
-            action_text = grounded_panel_text(engine, beat_text, scene, visible_names, absent_names)
+            action_text = grounded_panel_text(engine, beat_text, scene, visible_names, absent_names, global_summary)
             panel = {
                 "id": f"panel_{panel_number:04d}",
                 "panelNumber": panel_number,
@@ -2483,6 +2604,7 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
                 "beatNumber": beat_index,
                 "caption": trim_text(beat_text, 190),
                 "visualDescription": action_text if action_text != beat_text else "",
+                "dialogue": extract_dialogue(beat_text, characters),
                 "shot": SHOT_SEQUENCE[(panel_number - 1) % len(SHOT_SEQUENCE)],
                 "characterIds": present,
                 "absentCharacterIds": absent,
@@ -2509,6 +2631,7 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
             "chunkCount": analysis.get("chunkCount"),
             "world": analysis.get("world"),
             "notes": analysis.get("notes"),
+            "globalSummary": global_summary,
         },
         "wordCount": words,
         "sceneCount": len(scenes),

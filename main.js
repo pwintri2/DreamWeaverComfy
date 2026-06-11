@@ -246,8 +246,10 @@ function renderStoryBible(comic) {
     return;
   }
   const chunkPreview = chunks.slice(0, 6);
+  const globalSummary = analysis.globalSummary || "";
   target.innerHTML = `
     <h3>Story Bible</h3>
+    ${globalSummary ? `<p class="story-summary">${escapeHtml(globalSummary)}</p>` : ""}
     <div class="bible-grid">
       <article>
         <strong>Planner</strong>
