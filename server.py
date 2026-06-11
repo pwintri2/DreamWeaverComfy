@@ -43,6 +43,16 @@ DEFAULT_COMFY_URL = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188").rstri
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_PLANNER_TIMEOUT = float(os.environ.get("OLLAMA_PLANNER_TIMEOUT", "180"))
 OLLAMA_PANEL_PROMPT_TIMEOUT = float(os.environ.get("OLLAMA_PANEL_PROMPT_TIMEOUT", "60"))
+
+LLM_ENGINE_TYPES = {"ollama", "openai", "anthropic", "google"}
+DEFAULT_OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+DEFAULT_ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+CLOUD_PLANNER_IDS = {
+    "openai:env": ("openai", DEFAULT_OPENAI_MODEL),
+    "anthropic:env": ("anthropic", DEFAULT_ANTHROPIC_MODEL),
+    "gemini:env": ("google", DEFAULT_GEMINI_MODEL),
+}
 JOBS: dict[str, dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
 COMFY_PROCESS: subprocess.Popen[str] | None = None
@@ -1907,7 +1917,98 @@ def ollama_generate_json(model: str, system_prompt: str, user_prompt: str, timeo
     return parse_json_object(str(body.get("response") or ""))
 
 
-def llm_story_chunk_analysis(model: str, chunk: dict[str, Any], known_names: list[str]) -> dict[str, Any]:
+def _http_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), method="POST")
+    req.add_header("Content-Type", "application/json")
+    for name, value in headers.items():
+        req.add_header(name, value)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:400]
+        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+
+
+def openai_generate_json(key: str, model: str, system_prompt: str, user_prompt: str, timeout: float) -> dict[str, Any]:
+    body = _http_json(
+        "https://api.openai.com/v1/chat/completions",
+        {
+            "model": model or DEFAULT_OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+        },
+        {"Authorization": f"Bearer {key}"},
+        timeout,
+    )
+    choices = body.get("choices") or [{}]
+    content = (choices[0].get("message") or {}).get("content") if isinstance(choices[0], dict) else ""
+    return parse_json_object(str(content or ""))
+
+
+def anthropic_generate_json(key: str, model: str, system_prompt: str, user_prompt: str, timeout: float) -> dict[str, Any]:
+    body = _http_json(
+        "https://api.anthropic.com/v1/messages",
+        {
+            "model": model or DEFAULT_ANTHROPIC_MODEL,
+            "max_tokens": 2048,
+            "temperature": 0.1,
+            "system": f"{system_prompt} Respond with a single JSON object and nothing else.",
+            "messages": [{"role": "user", "content": user_prompt}],
+        },
+        {"x-api-key": key, "anthropic-version": "2023-06-01"},
+        timeout,
+    )
+    parts = body.get("content") or []
+    text = parts[0].get("text") if parts and isinstance(parts[0], dict) else ""
+    return parse_json_object(str(text or ""))
+
+
+def gemini_generate_json(key: str, model: str, system_prompt: str, user_prompt: str, timeout: float) -> dict[str, Any]:
+    model = model or DEFAULT_GEMINI_MODEL
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{urllib.parse.quote(model)}:generateContent?key={urllib.parse.quote(key)}"
+    body = _http_json(
+        url,
+        {
+            "contents": [{"parts": [{"text": f"{system_prompt}\n\n{user_prompt}"}]}],
+            "generationConfig": {"temperature": 0.1, "response_mime_type": "application/json"},
+        },
+        {},
+        timeout,
+    )
+    candidates = body.get("candidates") or [{}]
+    parts = ((candidates[0].get("content") or {}).get("parts") or [{}]) if isinstance(candidates[0], dict) else [{}]
+    text = parts[0].get("text") if parts and isinstance(parts[0], dict) else ""
+    return parse_json_object(str(text or ""))
+
+
+def planner_generate_json(
+    engine: dict[str, Any],
+    system_prompt: str,
+    user_prompt: str,
+    timeout: float = OLLAMA_PLANNER_TIMEOUT,
+) -> dict[str, Any]:
+    engine_type = str(engine.get("type") or "")
+    model = str(engine.get("model") or "")
+    if engine_type == "ollama":
+        return ollama_generate_json(model, system_prompt, user_prompt, timeout)
+    if engine_type in {"openai", "anthropic", "google"}:
+        key = get_provider_key(engine_type)
+        if not key:
+            raise RuntimeError(f"Geen API-key gekoppeld voor {engine_type}.")
+        if engine_type == "openai":
+            return openai_generate_json(key, model, system_prompt, user_prompt, timeout)
+        if engine_type == "anthropic":
+            return anthropic_generate_json(key, model, system_prompt, user_prompt, timeout)
+        return gemini_generate_json(key, model, system_prompt, user_prompt, timeout)
+    raise RuntimeError(f"Onbekende planner-provider: {engine_type}")
+
+
+def llm_story_chunk_analysis(engine: dict[str, Any], chunk: dict[str, Any], known_names: list[str]) -> dict[str, Any]:
     system_prompt = (
         "You are a strict comic-book story planner. Return valid JSON only. "
         "As a character, list only real persons/animals/beings actually present in this text. "
@@ -1944,7 +2045,7 @@ def llm_story_chunk_analysis(model: str, chunk: dict[str, Any], known_names: lis
         f"Analyze chunk {chunk.get('chunkNumber')} with {chunk.get('wordCount')} words:\n"
         f"{chunk.get('text')}"
     )
-    return ollama_generate_json(model, system_prompt, user_prompt)
+    return planner_generate_json(engine, system_prompt, user_prompt)
 
 
 def merge_llm_chunk_analysis(rule_analysis: dict[str, Any], llm_analysis: dict[str, Any], chunk_text: str) -> dict[str, Any]:
@@ -2028,6 +2129,14 @@ def planner_engine(planner_id: str) -> dict[str, Any]:
             "model": model,
             "label": f"Ollama: {model}",
         }
+    if planner_id in CLOUD_PLANNER_IDS:
+        provider, model = CLOUD_PLANNER_IDS[planner_id]
+        return {
+            "id": planner_id,
+            "type": provider,
+            "model": model,
+            "label": f"{PROVIDER_BY_ID.get(provider, {}).get('label', provider)}: {model}",
+        }
     return {
         "id": "local_rules",
         "type": "local_rules",
@@ -2038,15 +2147,15 @@ def planner_engine(planner_id: str) -> dict[str, Any]:
 
 def analyze_story_chunk(chunk: dict[str, Any], engine: dict[str, Any], known_names: list[str]) -> dict[str, Any]:
     rule_analysis = rule_story_chunk_analysis(chunk)
-    if engine.get("type") != "ollama":
+    if engine.get("type") not in LLM_ENGINE_TYPES:
         return rule_analysis
     try:
-        llm_analysis = llm_story_chunk_analysis(str(engine.get("model") or ""), chunk, known_names)
+        llm_analysis = llm_story_chunk_analysis(engine, chunk, known_names)
         if not llm_analysis:
-            raise ValueError("Ollama gaf geen JSON-object terug.")
+            raise ValueError("Planner gaf geen JSON-object terug.")
         return merge_llm_chunk_analysis(rule_analysis, llm_analysis, str(chunk.get("text") or ""))
     except Exception as exc:  # noqa: BLE001
-        rule_analysis["plannerError"] = f"Ollama fallback naar lokale regels: {exc}"
+        rule_analysis["plannerError"] = f"Planner fallback naar lokale regels: {exc}"
         return rule_analysis
 
 
@@ -2286,11 +2395,13 @@ def build_story_analysis(story: str, planner_id: str, job_id: str | None = None)
     characters = merge_character_cards(story, sentences, chunk_analyses)
     world = build_world_bible(chunk_analyses)
     notes = []
-    if engine["type"] == "ollama":
+    if engine["type"] in LLM_ENGINE_TYPES:
         errors = [str(chunk.get("plannerError")) for chunk in chunk_analyses if chunk.get("plannerError")]
-        notes.append(f"Ollama planner gebruikt: {engine['model']}.")
+        notes.append(f"Planner gebruikt: {engine.get('label') or engine['type']}.")
+        if engine["type"] != "ollama":
+            notes.append("Let op: verhaaltekst is naar de cloud-API van deze provider gestuurd.")
         if errors:
-            notes.append(f"{len(errors)} chunk(s) vielen terug op lokale regels.")
+            notes.append(f"{len(errors)} chunk(s) vielen terug op lokale regels: {errors[0]}")
     else:
         notes.append("Lokale regelplanner gebruikt; geen verhaaltekst naar cloud of API gestuurd.")
     return {
@@ -2338,7 +2449,7 @@ def build_panel_negative_prompt(
 
 
 def llm_panel_visual_prompt(
-    model: str,
+    engine: dict[str, Any],
     beat_text: str,
     scene: dict[str, Any],
     visible_names: list[str],
@@ -2371,7 +2482,7 @@ def llm_panel_visual_prompt(
         f"JSON schema: {json.dumps(schema_hint, ensure_ascii=False)}\n\n"
         f"Story beat (draw ONLY this):\n{trim_text(beat_text, 600)}"
     )
-    result = ollama_generate_json(model, system_prompt, user_prompt, timeout)
+    result = planner_generate_json(engine, system_prompt, user_prompt, timeout)
     visual = text_field(result, ["visual", "description", "prompt"])
     return trim_text(visual, 420)
 
@@ -2386,11 +2497,11 @@ def grounded_panel_text(
 ) -> str:
     # When the LLM planner is active, distil the raw beat into a tight, visual-only prompt.
     # Any failure or sign of hallucination falls back to the raw beat text.
-    if engine.get("type") != "ollama":
+    if engine.get("type") not in LLM_ENGINE_TYPES:
         return beat_text
     try:
         visual = llm_panel_visual_prompt(
-            str(engine.get("model") or ""), beat_text, scene, visible_names, absent_names, story_context
+            engine, beat_text, scene, visible_names, absent_names, story_context
         )
     except Exception:  # noqa: BLE001
         return beat_text
@@ -2534,7 +2645,7 @@ def extract_dialogue(text: str, characters: list[dict[str, Any]]) -> list[dict[s
 def build_global_story_summary(engine: dict[str, Any], chunk_analyses: list[dict[str, Any]]) -> str:
     summaries = [str(analysis.get("summary") or "") for analysis in chunk_analyses if analysis.get("summary")]
     joined = " ".join(summary for summary in summaries if summary).strip()
-    if engine.get("type") != "ollama" or not joined:
+    if engine.get("type") not in LLM_ENGINE_TYPES or not joined:
         return trim_text(joined, 600)
     try:
         system_prompt = (
@@ -2546,7 +2657,7 @@ def build_global_story_summary(engine: dict[str, Any], chunk_analyses: list[dict
             f"JSON schema: {json.dumps(schema_hint, ensure_ascii=False)}\n\n"
             f"Chunk summaries in order:\n{trim_text(joined, 4000)}"
         )
-        result = ollama_generate_json(str(engine.get("model") or ""), system_prompt, user_prompt)
+        result = planner_generate_json(engine, system_prompt, user_prompt)
         summary = text_field(result, ["summary", "samenvatting"])
         return trim_text(summary, 700) if word_count(summary) >= 5 else trim_text(joined, 600)
     except Exception:  # noqa: BLE001
