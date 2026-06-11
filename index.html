@@ -221,8 +221,21 @@
         De URL komt uit de backend-env var <code>COMFYUI_URL</code>. Voor Flatpak is netwerkdeling nodig zodat
         <code>127.0.0.1:8188</code> bereikbaar is.
       </p>
+      <button type="button" id="openApiKeysBtn" class="ghost-button" formnovalidate>API-keys koppelen…</button>
       <button class="primary-button" value="ok">Ok</button>
     </form>
+  </dialog>
+
+  <dialog id="apiKeysDialog" class="settings-dialog api-keys-dialog">
+    <header>
+      <h2>API-keys</h2>
+      <button type="button" class="icon-button" id="closeApiKeysBtn" aria-label="Sluiten">×</button>
+    </header>
+    <p class="api-keys-intro">
+      Keys worden lokaal opgeslagen in <code>data/secrets.json</code> (niet in git, niet gedeeld, alleen
+      leesbaar voor jou). Ze hebben voorrang op omgevingsvariabelen. Laat een veld leeg en bewaar om een key te verwijderen.
+    </p>
+    <div id="apiKeysList" class="api-keys-list"></div>
   </dialog>
 
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>

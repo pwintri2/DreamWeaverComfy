@@ -1,4 +1,4 @@
-import { cancelJob, extractDocumentText, generateCharacterReference, getJob, getStatus, regenerateComicPanel, startComic, startComfy, startDream, updateComicPanel } from "./api.js?v=0.2.4";
+import { cancelJob, extractDocumentText, generateCharacterReference, getJob, getSecrets, getStatus, regenerateComicPanel, saveSecret, startComic, startComfy, startDream, updateComicPanel } from "./api.js?v=0.2.4";
 import { setState } from "./state.js?v=0.2.4";
 import { addDream } from "./storage.js?v=0.2.4";
 import { initBackground } from "./ui/background.js?v=0.2.4";
@@ -470,6 +470,62 @@ async function pollPanelRegen(jobId, panelId) {
   throw new Error("Panel renderen duurde te lang.");
 }
 
+function renderApiKeys(providers) {
+  const list = document.getElementById("apiKeysList");
+  list.innerHTML = (providers || []).map((provider) => {
+    const statusLabel = provider.source === "saved"
+      ? `Gekoppeld · ${escapeHtml(provider.masked)}`
+      : provider.source === "env"
+        ? `Via omgevingsvariabele ${escapeHtml(provider.envVar)} · ${escapeHtml(provider.masked)}`
+        : "Niet gekoppeld";
+    const statusClass = provider.configured ? "api-key-status configured" : "api-key-status";
+    return `
+      <article class="api-key-card">
+        <div class="api-key-head">
+          <strong>${escapeHtml(provider.label)}</strong>
+          <span class="${statusClass}">${statusLabel}</span>
+        </div>
+        <div class="api-key-row">
+          <input type="password" class="api-key-input" data-provider="${escapeHtml(provider.id)}" placeholder="${escapeHtml(provider.hint)}" autocomplete="off" spellcheck="false">
+          <button type="button" class="api-key-save" data-provider="${escapeHtml(provider.id)}">Bewaar</button>
+        </div>
+        <a class="api-key-docs" href="${escapeHtml(provider.docs)}" target="_blank" rel="noreferrer noopener">Key aanmaken bij ${escapeHtml(provider.label)}</a>
+      </article>
+    `;
+  }).join("");
+}
+
+async function openApiKeysDialog() {
+  const dialog = document.getElementById("apiKeysDialog");
+  document.getElementById("apiKeysList").innerHTML = "<p>Laden...</p>";
+  dialog.showModal();
+  try {
+    const { providers } = await getSecrets();
+    renderApiKeys(providers);
+  } catch (error) {
+    document.getElementById("apiKeysList").innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function handleApiKeySave(event) {
+  const button = event.target.closest(".api-key-save");
+  if (!button) return;
+  const provider = button.dataset.provider;
+  const input = document.querySelector(`.api-key-input[data-provider="${CSS.escape(provider)}"]`);
+  const key = input ? input.value : "";
+  button.disabled = true;
+  try {
+    const { providers } = await saveSecret(provider, key);
+    renderApiKeys(providers);
+    showToast(key.trim() ? "API-key gekoppeld." : "API-key verwijderd.");
+    refreshStatus();
+  } catch (error) {
+    showToast(error.message, 5200);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function handleCharacterRefClick(event) {
   const button = event.target.closest(".character-ref-btn");
   if (!button) return;
@@ -639,6 +695,14 @@ function bindEvents() {
   document.getElementById("settingsNav").addEventListener("click", () => {
     document.getElementById("settingsDialog").showModal();
   });
+  document.getElementById("openApiKeysBtn").addEventListener("click", () => {
+    document.getElementById("settingsDialog").close();
+    openApiKeysDialog();
+  });
+  document.getElementById("closeApiKeysBtn").addEventListener("click", () => {
+    document.getElementById("apiKeysDialog").close();
+  });
+  document.getElementById("apiKeysList").addEventListener("click", handleApiKeySave);
   document.getElementById("cancelBackBtn").addEventListener("click", () => {
     stopLoadingMessages();
     showView("input");

@@ -77,3 +77,15 @@ export async function generateCharacterReference(payload) {
     body: JSON.stringify(payload),
   }));
 }
+
+export async function getSecrets() {
+  return readJson(await fetch("/api/secrets"));
+}
+
+export async function saveSecret(provider, key) {
+  return readJson(await fetch("/api/secrets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, key }),
+  }));
+}

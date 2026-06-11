@@ -48,6 +48,19 @@ JOBS_LOCK = threading.Lock()
 COMFY_PROCESS: subprocess.Popen[str] | None = None
 FRAME_CACHE_DIR = Path(os.environ.get("DREAMWEAVER_FRAME_CACHE", "/tmp/dreamweaver-comfy-frames"))
 VIDEO_FRAME_LIMIT = 48
+DATA_DIR = Path(os.environ.get("DREAMWEAVER_DATA_DIR", str(APP_DIR / "data")))
+SECRETS_FILE = DATA_DIR / "secrets.json"
+SECRETS_LOCK = threading.Lock()
+
+# Provider catalog for the API-keys page. envVar is the legacy env fallback; keys saved in the
+# UI are stored locally in SECRETS_FILE (gitignored, chmod 600) and take precedence over env.
+PROVIDER_CATALOG: list[dict[str, str]] = [
+    {"id": "openai", "label": "OpenAI", "envVar": "OPENAI_API_KEY", "hint": "sk-...", "docs": "https://platform.openai.com/api-keys"},
+    {"id": "anthropic", "label": "Anthropic (Claude)", "envVar": "ANTHROPIC_API_KEY", "hint": "sk-ant-...", "docs": "https://console.anthropic.com/settings/keys"},
+    {"id": "google", "label": "Google Gemini", "envVar": "GEMINI_API_KEY", "hint": "AIza...", "docs": "https://aistudio.google.com/app/apikey"},
+    {"id": "replicate", "label": "Replicate", "envVar": "REPLICATE_API_TOKEN", "hint": "r8_...", "docs": "https://replicate.com/account/api-tokens"},
+]
+PROVIDER_BY_ID = {provider["id"]: provider for provider in PROVIDER_CATALOG}
 VIDEO_FRAME_MAX_EDGE = 960
 COMIC_WORD_LIMIT = 50_000
 COMIC_ANALYSIS_CHUNK_TARGET_WORDS = 1_600
@@ -2672,6 +2685,84 @@ def paginate_comic_panels(panels: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return pages
 
 
+def load_secrets() -> dict[str, str]:
+    with SECRETS_LOCK:
+        try:
+            data = json.loads(SECRETS_FILE.read_text("utf-8") or "{}")
+        except FileNotFoundError:
+            return {}
+        except Exception:  # noqa: BLE001
+            return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(key): str(value) for key, value in data.items() if isinstance(value, str) and value.strip()}
+
+
+def save_secret(provider_id: str, key: str) -> None:
+    if provider_id not in PROVIDER_BY_ID:
+        raise ValueError("Onbekende provider.")
+    with SECRETS_LOCK:
+        try:
+            data = json.loads(SECRETS_FILE.read_text("utf-8") or "{}")
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:  # noqa: BLE001
+            data = {}
+        cleaned = key.strip()
+        if cleaned:
+            data[provider_id] = cleaned
+        else:
+            data.pop(provider_id, None)
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        SECRETS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+        try:
+            SECRETS_FILE.chmod(0o600)
+        except OSError:
+            pass
+
+
+def get_provider_key(provider_id: str) -> str:
+    secret = load_secrets().get(provider_id, "").strip()
+    if secret:
+        return secret
+    provider = PROVIDER_BY_ID.get(provider_id)
+    if provider:
+        return os.environ.get(provider["envVar"], "").strip()
+    return ""
+
+
+def mask_key(key: str) -> str:
+    key = key.strip()
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "•" * len(key)
+    return f"{key[:3]}…{key[-4:]}"
+
+
+def provider_status() -> list[dict[str, Any]]:
+    secrets = load_secrets()
+    result: list[dict[str, Any]] = []
+    for provider in PROVIDER_CATALOG:
+        pid = provider["id"]
+        secret = secrets.get(pid, "").strip()
+        env_key = os.environ.get(provider["envVar"], "").strip()
+        active = secret or env_key
+        result.append(
+            {
+                "id": pid,
+                "label": provider["label"],
+                "hint": provider["hint"],
+                "docs": provider["docs"],
+                "envVar": provider["envVar"],
+                "configured": bool(active),
+                "source": "saved" if secret else ("env" if env_key else "none"),
+                "masked": mask_key(active),
+            }
+        )
+    return result
+
+
 def cloud_model_choices() -> list[dict[str, Any]]:
     ollama_models = available_ollama_models()
     choices: list[dict[str, Any]] = []
@@ -2723,28 +2814,28 @@ def cloud_model_choices() -> list[dict[str, Any]]:
                 "id": "openai:env",
                 "label": f"OpenAI API ({os.environ.get('OPENAI_MODEL', 'OPENAI_MODEL env')})",
                 "provider": "openai",
-                "configured": bool(os.environ.get("OPENAI_API_KEY")),
-                "description": "Cloudplanner-adapter gereserveerd; API-key wordt alleen uit env gelezen.",
+                "configured": bool(get_provider_key("openai")),
+                "description": "Cloudplanner-adapter; API-key via de API-keys pagina of env.",
             },
             {
                 "id": "anthropic:env",
                 "label": f"Anthropic API ({os.environ.get('ANTHROPIC_MODEL', 'ANTHROPIC_MODEL env')})",
                 "provider": "anthropic",
-                "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
-                "description": "Cloudplanner-adapter gereserveerd; API-key wordt alleen uit env gelezen.",
+                "configured": bool(get_provider_key("anthropic")),
+                "description": "Cloudplanner-adapter; API-key via de API-keys pagina of env.",
             },
             {
                 "id": "gemini:env",
                 "label": f"Gemini API ({os.environ.get('GEMINI_MODEL', 'GEMINI_MODEL env')})",
                 "provider": "google",
-                "configured": bool(os.environ.get("GEMINI_API_KEY")),
-                "description": "Cloudplanner-adapter gereserveerd; API-key wordt alleen uit env gelezen.",
+                "configured": bool(get_provider_key("google")),
+                "description": "Cloudplanner-adapter; API-key via de API-keys pagina of env.",
             },
             {
                 "id": "replicate:env",
                 "label": "Replicate API (REPLICATE_API_TOKEN)",
                 "provider": "replicate",
-                "configured": bool(os.environ.get("REPLICATE_API_TOKEN")),
+                "configured": bool(get_provider_key("replicate")),
                 "description": "Voor toekomstige cloud image/video adapters.",
             },
         ]
@@ -3610,6 +3701,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "Job niet gevonden."}, 404)
                     return
                 self.send_json(job)
+            elif parsed.path == "/api/secrets":
+                self.send_json({"providers": provider_status()})
             elif parsed.path == "/api/comfy-view":
                 self.proxy_comfy_view(parsed.query)
             elif parsed.path == "/api/video-frames":
@@ -3710,6 +3803,14 @@ class Handler(BaseHTTPRequestHandler):
                 thread = threading.Thread(target=generate_character_reference_job, args=(job_id, character_id, base_seed), daemon=True)
                 thread.start()
                 self.send_json({"started": True, "jobId": job_id, "characterId": character_id})
+            elif parsed.path == "/api/secrets":
+                data = self.read_json()
+                provider_id = str(data.get("provider") or "")
+                if provider_id not in PROVIDER_BY_ID:
+                    self.send_json({"error": "Onbekende provider."}, 400)
+                    return
+                save_secret(provider_id, str(data.get("key") or ""))
+                self.send_json({"saved": True, "providers": provider_status()})
             elif parsed.path == "/api/cancel-job":
                 data = self.read_json()
                 job_id = str(data.get("jobId") or "")
