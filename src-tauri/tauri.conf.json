@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "",
     "beforeBuildCommand": "sh scripts/prepare-tauri-assets.sh",
-    "devUrl": "http://127.0.0.1:8791",
+    "devUrl": "about:blank",
     "frontendDist": "../desktop-dist"
   },
   "app": {
@@ -17,7 +17,7 @@
         "height": 820,
         "minWidth": 760,
         "minHeight": 620,
-        "url": "http://127.0.0.1:8791/?v=0.2.4"
+        "url": "about:blank"
       }
     ],
     "security": {

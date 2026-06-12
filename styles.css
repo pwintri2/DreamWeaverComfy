@@ -508,6 +508,11 @@ input:focus {
   margin: 0;
 }
 
+.character-card .character-relations {
+  color: var(--text);
+  font-weight: 700;
+}
+
 .story-summary {
   margin: 0 0 12px;
   padding: 10px 12px;

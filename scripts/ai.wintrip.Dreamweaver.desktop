@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Dreamweaver Comfy
+GenericName=Comic & Dream Generator
+Comment=Local comic and dream generator for ComfyUI
+Exec=/home/pwintri2/DreamweaverComfy/scripts/launch-desktop.sh
+Icon=/home/pwintri2/DreamweaverComfy/src-tauri/icons/128x128@2x.png
+Terminal=false
+Categories=Graphics;2DGraphics;
+Keywords=AI;Comic;Dream;ComfyUI;Generator;
+StartupNotify=true
+StartupWMClass=dreamweaver-comfy

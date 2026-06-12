@@ -97,7 +97,7 @@ NAME_BLOCKLIST = {
     "Deze", "Die", "Dit", "Door", "Een", "En", "Er", "For", "Geen", "Het",
     "Hij", "Hoe", "Hun", "Ik", "In", "Is", "Later", "Maar", "Met", "Na",
     "Naast", "Niet", "Of", "Om", "Omdat", "Onder", "Ondertussen", "Op", "Over", "The", "Toen", "Tot",
-    "Tussen", "Uit", "Van", "Voor", "Waar", "Wat", "We", "Ze", "Zij", "Zijn",
+    "Tussen", "Uit", "Van", "Voor", "Waar", "Wat", "We", "Without", "Ze", "Zij", "Zijn", "Zonder",
     # Pronouns that often appear capitalized at start of sentences or in dialogue - never character names
     "They", "You", "Me", "He", "She", "Us", "Them", "It", "My", "Your", "His", "Her", "Their", "Our", "Its", "I",
     "Jij", "Jou", "Wij", "Ons",
@@ -150,11 +150,11 @@ PERSON_ACTION_WORDS = {
     "luistert", "opent", "opende", "pakt", "pakte", "rent", "rende", "roept", "riep", "staat", "stond",
     "vertrekt", "vertrok", "vraagt", "vroeg", "wacht", "wachtte", "zegt", "zei", "ziet", "zag", "zit", "zat",
     # more common actions for better character detection
-    "found", "read", "decided", "appeared", "warned", "kept", "studied", "discovered", "met", "talked",
+    "carried", "carries", "closed", "closes", "found", "lifted", "lifts", "read", "decided", "appeared", "warned", "kept", "studied", "discovered", "met", "talked",
     "opened", "wrote", "learned", "realized", "chose", "picked", "took", "gave", "showed", "told",
     "searched", "hid", "fought", "jumped", "climbed", "pushed", "pulled", "threw", "caught", "understood",
     "knew", "believed", "hoped", "feared", "loved", "hated", "helped", "saved", "killed", "died", "lived",
-    "vond", "las", "besloot", "verscheen", "waarschuwde", "bewaarde", "bestudeerde", "ontdekte", "ontmoette", "praatte",
+    "droeg", "draagt", "tilde", "tilt", "vond", "las", "besloot", "verscheen", "waarschuwde", "bewaarde", "bestudeerde", "ontdekte", "ontmoette", "praatte",
     "opende", "schreef", "leerde", "besefte", "koos", "pakte", "nam", "gaf", "toonde", "vertelde",
 }
 
@@ -266,13 +266,57 @@ EMPTY_SCENE_CUES = [
     "geen personage", "geen personages", "leeg", "niemand", "verlaten achter",
 ]
 
-FIRST_PERSON_WORDS = {"i", "ik", "me", "mij", "mijn"}
-PRONOUN_WORDS = {
-    "he", "him", "his", "she", "her", "hers", "they", "them", "their",
-    "hij", "hem", "zijn", "zij", "ze", "haar", "hun",
-}
+FIRST_PERSON_WORDS = {"i", "ik", "me", "mij", "mijn", "my", "mine", "we", "wij", "ons", "onze", "our", "ours"}
+FEMALE_PRONOUN_WORDS = {"she", "her", "hers", "zij", "ze", "haar"}
+MALE_PRONOUN_WORDS = {"he", "him", "his", "hij", "hem", "zijn"}
+PLURAL_PRONOUN_WORDS = {"they", "them", "their", "theirs", "zij", "ze", "hun", "hen"}
+PRONOUN_WORDS = FEMALE_PRONOUN_WORDS | MALE_PRONOUN_WORDS | PLURAL_PRONOUN_WORDS
 FEMALE_SIGNAL_WORDS = {"she", "her", "hers", "woman", "girl", "mother", "daughter", "zij", "ze", "haar", "vrouw", "meisje", "moeder", "dochter"}
 MALE_SIGNAL_WORDS = {"he", "him", "his", "man", "boy", "father", "son", "hij", "hem", "zijn", "jongen", "man", "vader", "zoon"}
+RELATION_LABELS = {
+    "brother": "brother",
+    "sister": "sister",
+    "mother": "mother",
+    "father": "father",
+    "daughter": "daughter",
+    "son": "son",
+    "parent": "parent",
+    "child": "child",
+    "friend": "friend",
+    "partner": "partner",
+    "wife": "wife",
+    "husband": "husband",
+    "mentor": "mentor",
+    "teacher": "teacher",
+    "student": "student",
+    "captain": "captain",
+    "doctor": "doctor",
+    "broer": "brother",
+    "zus": "sister",
+    "moeder": "mother",
+    "vader": "father",
+    "dochter": "daughter",
+    "zoon": "son",
+    "ouder": "parent",
+    "kind": "child",
+    "vriend": "friend",
+    "vriendin": "friend",
+    "partner": "partner",
+    "vrouw": "wife",
+    "man": "husband",
+    "mentor": "mentor",
+    "leraar": "teacher",
+    "lerares": "teacher",
+    "student": "student",
+    "kapitein": "captain",
+    "dokter": "doctor",
+}
+FEMALE_NAME_HINTS = {
+    "anna", "eva", "emma", "lisa", "mara", "maria", "olga", "sara", "sarah", "wendy",
+}
+MALE_NAME_HINTS = {
+    "adam", "alex", "david", "jan", "leo", "lucas", "mark", "max", "noah", "peter", "sam", "tom",
+}
 
 VISUAL_OBJECT_KEYWORDS = {
     "brief": "letter",
@@ -1174,8 +1218,13 @@ def candidate_person_context(text: str, start: int, end: int, at_sentence_start:
     score = 0
     action_pattern = "|".join(re.escape(word) for word in PERSON_ACTION_WORDS)
     attribution_pattern = "|".join(re.escape(word) for word in ATTRIBUTION_WORDS)
+    relation_pattern = "|".join(re.escape(word) for word in RELATION_LABELS)
     if re.match(rf"\s+(?:{action_pattern})\b", after):
         score += 3
+    if re.match(rf"\s*,?\s*(?:her|his|their|haar|zijn|hun)?\s*(?:{relation_pattern})\b", after):
+        score += 3
+    if re.search(rf"\b(?:{relation_pattern})\s*,?\s*$", before):
+        score += 2
     if re.search(rf"\b(?:{attribution_pattern})\s+$", before):
         score += 3
     if re.search(r"\b(?:and|en|with|met|zonder|without)\s+$", before):
@@ -1492,20 +1541,179 @@ def detect_mood(text: str) -> str:
     return scores[0][1]
 
 
-def mentioned_character_ids(text: str, characters: list[dict[str, Any]]) -> list[str]:
-    matches = []
-    lower = text.lower()
-    words = lower_word_set(text)
-    for character in characters:
-        name = str(character["name"])
-        if name in {"Narrator", "Protagonist"} and words & FIRST_PERSON_WORDS:
-            matches.append((0, str(character["id"])))
+def _unique_text(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        clean = str(item or "").strip()
+        key = clean.lower()
+        if not clean or key in seen:
             continue
-        match = re.search(rf"\b{re.escape(name.lower())}\b", lower)
-        if match:
-            matches.append((match.start(), str(character["id"])))
+        seen.add(key)
+        result.append(clean)
+    return result
+
+
+def character_aliases(character: dict[str, Any], include_first_name: bool = True) -> list[str]:
+    aliases = [str(character.get("name") or ""), *[str(alias or "") for alias in safe_list(character.get("aliases"))]]
+    expanded: list[str] = []
+    for alias in aliases:
+        clean = re.sub(r"\s+", " ", alias.strip().strip(" .,:;!?\"'“”"))
+        if not clean:
+            continue
+        expanded.append(clean)
+        parts = clean.split()
+        first = parts[0].strip(" .,:;!?\"'“”") if parts else ""
+        first_lower = first.lower()
+        if (
+            include_first_name
+            and len(parts) > 1
+            and len(first) >= 3
+            and first_lower not in NON_CHARACTER_NAME_WORDS
+            and first not in NAME_BLOCKLIST
+            and first.capitalize() not in NAME_BLOCKLIST
+        ):
+            expanded.append(first)
+    return _unique_text(expanded)
+
+
+def first_person_reference_position(text: str) -> int | None:
+    match = re.search(r"\b(?:i|ik|me|mij|mijn|my|mine|we|wij|ons|onze|our|ours)\b", text, re.IGNORECASE)
+    return match.start() if match else None
+
+
+def character_mention_positions(text: str, characters: list[dict[str, Any]]) -> list[tuple[int, int, str, str]]:
+    matches: list[tuple[int, int, str, str]] = []
+    for character in characters:
+        char_id = str(character.get("id") or "")
+        if not char_id:
+            continue
+        for alias in character_aliases(character):
+            if alias in {"Narrator", "Protagonist"}:
+                continue
+            for match in re.finditer(rf"\b{re.escape(alias)}\b", text, re.IGNORECASE):
+                matches.append((match.start(), match.end(), char_id, alias))
+    matches.sort(key=lambda item: (item[0], -(item[1] - item[0])))
+    return matches
+
+
+def mentioned_character_ids(text: str, characters: list[dict[str, Any]]) -> list[str]:
+    matches: list[tuple[int, str]] = []
+    first_person_pos = first_person_reference_position(text)
+    for character in characters:
+        name = str(character.get("name") or "")
+        char_id = str(character.get("id") or "")
+        if not char_id:
+            continue
+        if name in {"Narrator", "Protagonist"} and first_person_pos is not None:
+            matches.append((first_person_pos, char_id))
+            continue
+    for start, _, char_id, _ in character_mention_positions(text, characters):
+        matches.append((start, char_id))
     matches.sort()
     return ordered_unique([char_id for _, char_id in matches])
+
+
+def last_mentioned_character_id(text: str, characters: list[dict[str, Any]]) -> str | None:
+    positions = character_mention_positions(text, characters)
+    return positions[-1][2] if positions else None
+
+
+def character_gender_by_id(characters: list[dict[str, Any]]) -> dict[str, str]:
+    return {
+        str(character.get("id") or ""): normalize_gender(str(character.get("gender") or ""))
+        for character in characters
+        if character.get("id")
+    }
+
+
+def _known_character_ids(characters: list[dict[str, Any]]) -> list[str]:
+    return [str(character.get("id") or "") for character in characters if character.get("id")]
+
+
+def _resolve_gendered_reference(
+    gender: str,
+    characters: list[dict[str, Any]],
+    candidates: list[str] | None = None,
+    active: list[str] | None = None,
+    last_subject: str | None = None,
+) -> list[str]:
+    genders = character_gender_by_id(characters)
+    all_ids = _known_character_ids(characters)
+    candidate_ids = ordered_unique([char_id for char_id in (candidates or []) if char_id in all_ids])
+    active_ids = ordered_unique([char_id for char_id in (active or []) if char_id in all_ids])
+    search_order = ordered_unique([*( [last_subject] if last_subject else [] ), *active_ids, *candidate_ids, *all_ids])
+
+    def has_gender(char_id: str) -> bool:
+        return genders.get(char_id) == gender
+
+    if last_subject and last_subject in search_order and has_gender(last_subject):
+        return [last_subject]
+
+    active_matches = [char_id for char_id in active_ids if has_gender(char_id)]
+    if len(active_matches) == 1:
+        return active_matches
+
+    candidate_matches = [char_id for char_id in candidate_ids if has_gender(char_id)]
+    if len(candidate_matches) == 1:
+        return candidate_matches
+
+    all_matches = [char_id for char_id in all_ids if has_gender(char_id)]
+    if len(all_matches) == 1:
+        return all_matches
+
+    unknown_active = [char_id for char_id in active_ids if genders.get(char_id, "unknown") == "unknown"]
+    if len(unknown_active) == 1:
+        return unknown_active
+
+    unknown_candidates = [char_id for char_id in candidate_ids if genders.get(char_id, "unknown") == "unknown"]
+    if len(unknown_candidates) == 1:
+        return unknown_candidates
+
+    single_context = active_ids or candidate_ids
+    return single_context if len(single_context) == 1 else []
+
+
+def pronoun_referenced_character_ids(
+    text: str,
+    characters: list[dict[str, Any]],
+    candidates: list[str] | None = None,
+    active: list[str] | None = None,
+    last_subject: str | None = None,
+) -> list[str]:
+    words = lower_word_set(text)
+    if not words & (PRONOUN_WORDS | FIRST_PERSON_WORDS):
+        return []
+    result: list[str] = []
+    all_ids = _known_character_ids(characters)
+
+    if words & FIRST_PERSON_WORDS:
+        for character in characters:
+            if str(character.get("name") or "") in {"Narrator", "Protagonist"}:
+                result.append(str(character.get("id")))
+                break
+
+    if words & FEMALE_PRONOUN_WORDS:
+        result.extend(_resolve_gendered_reference("female", characters, candidates, active, last_subject))
+    if words & MALE_PRONOUN_WORDS:
+        result.extend(_resolve_gendered_reference("male", characters, candidates, active, last_subject))
+    plural_hits = words & PLURAL_PRONOUN_WORDS
+    if plural_hits and (plural_hits - {"zij", "ze"} or not result):
+        context_ids = ordered_unique([char_id for char_id in [*(active or []), *(candidates or [])] if char_id in all_ids])
+        if context_ids:
+            result.extend(context_ids)
+
+    return ordered_unique([char_id for char_id in result if char_id in all_ids])
+
+
+def text_has_object_pronoun_reference(text: str) -> bool:
+    lower = text.lower()
+    relation_pattern = "|".join(re.escape(word) for word in RELATION_LABELS)
+    if re.search(r"\b(?:him|hem|them|hen)\b", lower):
+        return True
+    if re.search(rf"\b(?:her|haar)\b(?!\s+(?:{relation_pattern})\b)", lower):
+        return True
+    return False
 
 
 def scene_characters(text: str, characters: list[dict[str, Any]]) -> list[str]:
@@ -1535,20 +1743,24 @@ def scene_has_pronoun_reference(text: str) -> bool:
 
 def timeline_casts_for_scenes(scene_texts: list[str], characters: list[dict[str, Any]]) -> list[dict[str, list[str]]]:
     active: list[str] = []
+    last_subject: str | None = None
     all_ids = [str(character["id"]) for character in characters]
     scene_casts: list[dict[str, list[str]]] = []
 
     for scene_text in scene_texts:
         mentioned = mentioned_character_ids(scene_text, characters)
-        explicit_absent = explicit_absent_character_ids(scene_text, characters)
-        exits = exiting_character_ids(scene_text, characters)
+        last_mention = last_mentioned_character_id(scene_text, characters)
+        explicit_absent = explicit_absent_character_ids(scene_text, characters, active=active, candidates=all_ids, last_subject=last_subject)
+        exits = exiting_character_ids(scene_text, characters, active=active, candidates=all_ids, last_subject=last_subject)
+        pronoun_refs = pronoun_referenced_character_ids(scene_text, characters, candidates=all_ids, active=active, last_subject=last_subject)
+        empty_without_people = scene_has_empty_cue(scene_text) and not (mentioned or pronoun_refs or story_has_human_signal(scene_text))
 
         if mentioned:
             present = [char_id for char_id in mentioned if char_id not in explicit_absent]
-        elif scene_has_empty_cue(scene_text):
+        elif empty_without_people:
             present = []
-        elif active and scene_has_pronoun_reference(scene_text):
-            present = [char_id for char_id in active if char_id not in explicit_absent]
+        elif pronoun_refs:
+            present = [char_id for char_id in pronoun_refs if char_id not in explicit_absent]
         elif len(characters) == 1 and story_has_human_signal(scene_text) and not explicit_absent:
             present = [all_ids[0]]
         else:
@@ -1567,6 +1779,10 @@ def timeline_casts_for_scenes(scene_texts: list[str], characters: list[dict[str,
         active = [char_id for char_id in present if char_id not in exits]
         if exits:
             active = [char_id for char_id in active if char_id not in exits]
+        if last_mention and last_mention in present:
+            last_subject = last_mention
+        elif len(present) == 1:
+            last_subject = present[0]
 
     return scene_casts
 
@@ -1582,40 +1798,71 @@ def ordered_unique(items: list[str]) -> list[str]:
     return result
 
 
-def explicit_absent_character_ids(text: str, characters: list[dict[str, Any]]) -> list[str]:
+def explicit_absent_character_ids(
+    text: str,
+    characters: list[dict[str, Any]],
+    active: list[str] | None = None,
+    candidates: list[str] | None = None,
+    last_subject: str | None = None,
+) -> list[str]:
     absent: list[str] = []
     state_pattern = "|".join(re.escape(keyword) for keyword in ABSENCE_STATE_KEYWORDS)
+    relation_pattern = "|".join(re.escape(word) for word in RELATION_LABELS)
     for sentence in split_sentences(text):
         lower = sentence.lower()
         for character in characters:
             char_id = str(character["id"])
-            name = str(character["name"]).lower()
-            if re.search(rf"\bzonder\s+{re.escape(name)}\b", lower):
-                absent.append(char_id)
-                continue
-            if re.search(rf"\bniet\s+bij\s+{re.escape(name)}\b", lower):
-                absent.append(char_id)
-                continue
-            if re.search(rf"\b{re.escape(name)}\b[^.!?]{{0,90}}\b(?:{state_pattern})\b", lower):
-                absent.append(char_id)
-                continue
-            if re.search(rf"\b(?:{state_pattern})\b[^.!?]{{0,90}}\b{re.escape(name)}\b", lower):
-                absent.append(char_id)
+            for alias in character_aliases(character):
+                name = alias.lower()
+                if re.search(rf"\bzonder\s+{re.escape(name)}\b", lower):
+                    absent.append(char_id)
+                    break
+                if re.search(rf"\bniet\s+bij\s+{re.escape(name)}\b", lower):
+                    absent.append(char_id)
+                    break
+                if re.search(rf"\bwithout\s+{re.escape(name)}\b", lower):
+                    absent.append(char_id)
+                    break
+                if re.search(rf"\bnot\s+with\s+{re.escape(name)}\b", lower):
+                    absent.append(char_id)
+                    break
+                if re.search(rf"\b{re.escape(name)}\b[^.!?]{{0,90}}\b(?:{state_pattern})\b", lower):
+                    absent.append(char_id)
+                    break
+                if re.search(rf"\b(?:{state_pattern})\b[^.!?]{{0,90}}\b{re.escape(name)}\b", lower):
+                    absent.append(char_id)
+                    break
+        if re.search(rf"\b(?:without|not with|zonder|niet bij)\s+(?:him|hem|them|hen|her|haar)\b(?!\s+(?:{relation_pattern})\b)", lower):
+            absent.extend(pronoun_referenced_character_ids(sentence, characters, candidates, active, last_subject))
     return ordered_unique(absent)
 
 
-def exiting_character_ids(text: str, characters: list[dict[str, Any]]) -> list[str]:
+def exiting_character_ids(
+    text: str,
+    characters: list[dict[str, Any]],
+    active: list[str] | None = None,
+    candidates: list[str] | None = None,
+    last_subject: str | None = None,
+) -> list[str]:
     lower = text.lower()
     exit_pattern = "|".join(re.escape(keyword) for keyword in EXIT_KEYWORDS)
+    pronoun_exit_pattern = "|".join(re.escape(keyword) for keyword in EXIT_KEYWORDS if keyword != "left")
+    subject_pronoun_pattern = "he|she|they|hij|zij|ze"
     exiting: list[str] = []
     for character in characters:
         char_id = str(character["id"])
-        name = str(character["name"]).lower()
-        if re.search(rf"\b{re.escape(name)}\b[^.!?]{{0,90}}\b(?:{exit_pattern})\b", lower):
-            exiting.append(char_id)
-            continue
-        if re.search(rf"\b(?:{exit_pattern})\b[^.!?]{{0,90}}\b{re.escape(name)}\b", lower):
-            exiting.append(char_id)
+        for alias in character_aliases(character):
+            name = alias.lower()
+            if re.search(rf"\b{re.escape(name)}\b[^.!?]{{0,90}}\b(?:{exit_pattern})\b", lower):
+                exiting.append(char_id)
+                break
+            if re.search(rf"\b(?:{exit_pattern})\b[^.!?]{{0,90}}\b{re.escape(name)}\b", lower):
+                exiting.append(char_id)
+                break
+    for sentence in split_sentences(text):
+        sentence_lower = sentence.lower()
+        if re.search(rf"\b(?:{subject_pronoun_pattern})\b[^.!?]{{0,70}}\b(?:{pronoun_exit_pattern})\b", sentence_lower):
+            exiting.extend(pronoun_referenced_character_ids(sentence, characters, candidates, active, last_subject))
     return ordered_unique(exiting)
 
 
@@ -1624,7 +1871,8 @@ def panel_casts_for_scene(
     scene_cast: list[str],
     characters: list[dict[str, Any]],
 ) -> list[dict[str, list[str]]]:
-    active: list[str] = []
+    active: list[str] = list(scene_cast)
+    last_subject: str | None = active[0] if len(active) == 1 else None
     left_scene: list[str] = []
     casts: list[dict[str, list[str]]] = []
     fallback_used = False
@@ -1632,23 +1880,50 @@ def panel_casts_for_scene(
     for beat_sentences in beats:
         beat_text = " ".join(beat_sentences).strip()
         active_before = list(active)
+        candidates = [char_id for char_id in scene_cast if char_id not in left_scene]
         mentioned = mentioned_character_ids(beat_text, characters)
-        explicit_absent = explicit_absent_character_ids(beat_text, characters)
-        exits = exiting_character_ids(beat_text, characters)
+        last_mention = last_mentioned_character_id(beat_text, characters)
+        explicit_absent = explicit_absent_character_ids(
+            beat_text,
+            characters,
+            active=active_before,
+            candidates=candidates,
+            last_subject=last_subject,
+        )
+        exits = exiting_character_ids(
+            beat_text,
+            characters,
+            active=active_before,
+            candidates=candidates,
+            last_subject=last_subject,
+        )
+        pronoun_refs = pronoun_referenced_character_ids(
+            beat_text,
+            characters,
+            candidates=candidates,
+            active=active_before,
+            last_subject=last_subject,
+        )
+        empty_without_people = scene_has_empty_cue(beat_text) and not (mentioned or pronoun_refs or story_has_human_signal(beat_text))
         visible_mentions = [char_id for char_id in mentioned if char_id not in explicit_absent]
 
         if visible_mentions:
             present = visible_mentions
+            if text_has_object_pronoun_reference(beat_text):
+                present = ordered_unique([*present, *[char_id for char_id in pronoun_refs if char_id not in explicit_absent]])
             left_scene = [char_id for char_id in left_scene if char_id not in present]
-        elif active:
-            present = [char_id for char_id in active if char_id not in left_scene]
+        elif empty_without_people:
+            present = []
+        elif pronoun_refs:
+            present = [char_id for char_id in pronoun_refs if char_id not in left_scene]
+        elif len(active_before) == 1 and story_has_human_signal(beat_text):
+            present = [char_id for char_id in active_before if char_id not in left_scene]
         else:
-            candidates = [char_id for char_id in scene_cast if char_id not in left_scene]
-            present = candidates[:1] if candidates and not fallback_used else []
+            present = candidates[:1] if candidates and not fallback_used and story_has_human_signal(beat_text) else []
             fallback_used = bool(present) or fallback_used
 
         lower = beat_text.lower()
-        if scene_has_empty_cue(beat_text):
+        if empty_without_people:
             present = []
         if "alleen" in lower and present:
             if visible_mentions:
@@ -1673,7 +1948,15 @@ def panel_casts_for_scene(
             }
         )
 
-        active = [char_id for char_id in present if char_id not in exits]
+        if visible_mentions:
+            last_subject = last_mention if last_mention in present else visible_mentions[-1]
+        elif len(present) == 1:
+            last_subject = present[0]
+
+        if present or empty_without_people:
+            active = [char_id for char_id in present if char_id not in exits]
+        else:
+            active = [char_id for char_id in active_before if char_id not in exits]
         left_scene = ordered_unique([*left_scene, *exits])
 
     return casts
@@ -1935,10 +2218,20 @@ def normalize_gender(value: str) -> str:
 def infer_character_gender(name: str, contexts: list[str]) -> str:
     female = 0
     male = 0
+    escaped = re.escape(name)
+    first_name = canonical_element_key(name).split()[0] if canonical_element_key(name).split() else canonical_element_key(name)
+    if first_name in FEMALE_NAME_HINTS:
+        female += 2
+    if first_name in MALE_NAME_HINTS:
+        male += 2
     for context in contexts:
         words = lower_word_set(context)
         female += len(words & FEMALE_SIGNAL_WORDS)
         male += len(words & MALE_SIGNAL_WORDS)
+        if re.search(rf"\b{escaped}\b\s*,\s*(?:her|his|their|haar|zijn|hun)?\s*(?:sister|mother|daughter|wife|zus|moeder|dochter|vrouw)\b", context, re.IGNORECASE):
+            female += 3
+        if re.search(rf"\b{escaped}\b\s*,\s*(?:her|his|their|haar|zijn|hun)?\s*(?:brother|father|son|husband|broer|vader|zoon|man)\b", context, re.IGNORECASE):
+            male += 3
     if female > male:
         return "female"
     if male > female:
@@ -2536,6 +2829,104 @@ def merge_named_elements(chunk_analyses: list[dict[str, Any]], field: str, prefi
     return elements
 
 
+def extract_relationships(story: str, characters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if len(characters) < 2:
+        return []
+
+    by_id = {str(character.get("id") or ""): str(character.get("name") or "") for character in characters}
+    relation_pattern = "|".join(re.escape(word) for word in sorted(RELATION_LABELS, key=len, reverse=True))
+    relationships: dict[tuple[str, str, str], dict[str, Any]] = {}
+    active: list[str] = []
+    last_subject: str | None = None
+
+    def add_relationship(source_id: str | None, target_id: str | None, relation: str, evidence: str) -> None:
+        if not source_id or not target_id or source_id == target_id:
+            return
+        if source_id not in by_id or target_id not in by_id:
+            return
+        key = (source_id, target_id, relation)
+        relationships.setdefault(
+            key,
+            {
+                "sourceId": source_id,
+                "source": by_id[source_id],
+                "targetId": target_id,
+                "target": by_id[target_id],
+                "relation": relation,
+                "evidence": trim_text(evidence, 180),
+            },
+        )
+
+    for sentence in split_sentences(story):
+        lower = sentence.lower()
+        mentions = mentioned_character_ids(sentence, characters)
+        last_mention = last_mentioned_character_id(sentence, characters)
+        positions = character_mention_positions(sentence, characters)
+        if not positions:
+            if mentions:
+                active = mentions
+                last_subject = last_mention or mentions[-1]
+            continue
+
+        for relation_match in re.finditer(rf"\b({relation_pattern})\b", lower):
+            relation_word = relation_match.group(1)
+            relation = RELATION_LABELS.get(relation_word, relation_word)
+            before = [position for position in positions if position[1] <= relation_match.start()]
+            after = [position for position in positions if position[0] >= relation_match.end()]
+
+            source_id: str | None = None
+            target_id: str | None = None
+
+            for _, end, char_id, _ in reversed(before):
+                bridge = lower[end:relation_match.start()].strip()
+                if bridge in {"'s", "’s", "haar", "zijn"}:
+                    source_id = char_id
+                    break
+
+            lead = lower[max(0, relation_match.start() - 18):relation_match.start()]
+            if not source_id and re.search(r"\b(?:her|haar|his|zijn)\s*$", lead):
+                resolved = pronoun_referenced_character_ids(
+                    sentence,
+                    characters,
+                    candidates=mentions or active,
+                    active=active,
+                    last_subject=last_subject,
+                )
+                source_id = resolved[0] if resolved else None
+                if not source_id:
+                    prior_mentions = [position for position in before if position[2] not in {source_id}]
+                    if prior_mentions:
+                        source_id = prior_mentions[-1][2]
+
+            for _, _, char_id, _ in after:
+                if char_id != source_id:
+                    target_id = char_id
+                    break
+            if not target_id:
+                for _, _, char_id, _ in reversed(before):
+                    if char_id != source_id:
+                        target_id = char_id
+                        break
+
+            add_relationship(source_id, target_id, relation, sentence)
+
+        if mentions:
+            active = mentions
+            last_subject = last_mention or mentions[-1]
+
+    return list(relationships.values())[:40]
+
+
+def attach_relationships_to_characters(characters: list[dict[str, Any]], relationships: list[dict[str, Any]]) -> None:
+    for character in characters:
+        char_id = str(character.get("id") or "")
+        character["relationships"] = [
+            relationship
+            for relationship in relationships
+            if relationship.get("sourceId") == char_id or relationship.get("targetId") == char_id
+        ][:6]
+
+
 def build_world_bible(chunk_analyses: list[dict[str, Any]]) -> dict[str, Any]:
     summaries = [
         {
@@ -2549,6 +2940,7 @@ def build_world_bible(chunk_analyses: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "locations": merge_named_elements(chunk_analyses, "locations", "loc"),
         "objects": merge_named_elements(chunk_analyses, "objects", "obj"),
+        "relationships": [],
         "chunkSummaries": summaries,
     }
 
@@ -2621,6 +3013,9 @@ def build_story_analysis(story: str, planner_id: str, job_id: str | None = None)
                                   precomputed_action_pos=precomputed_action_pos,
                                   precomputed_neg_pos=precomputed_neg_pos)
     ]
+    relationships = extract_relationships(story, characters)
+    world["relationships"] = relationships
+    attach_relationships_to_characters(characters, relationships)
     notes = []
     if engine["type"] in LLM_ENGINE_TYPES:
         errors = [str(chunk.get("plannerError")) for chunk in chunk_analyses if chunk.get("plannerError")]
@@ -2632,7 +3027,7 @@ def build_story_analysis(story: str, planner_id: str, job_id: str | None = None)
     else:
         notes.append("Lokale regelplanner gebruikt; geen verhaaltekst naar cloud of API gestuurd.")
     return {
-        "pipeline": "chunked_story_bible_v1",
+        "pipeline": "chunked_story_bible_v2",
         "planner": engine,
         "chunkCount": total_chunks,
         "chunks": chunk_analyses,
@@ -2909,6 +3304,32 @@ def build_global_story_summary(engine: dict[str, Any], chunk_analyses: list[dict
         return trim_text(joined, 600)
 
 
+def panel_story_context(
+    global_summary: str,
+    world: dict[str, Any],
+    present_ids: list[str],
+    absent_ids: list[str],
+) -> str:
+    parts = [global_summary.strip()] if global_summary.strip() else []
+    relevant_ids = set(present_ids) | set(absent_ids)
+    relationship_lines = []
+    for relationship in safe_list(world.get("relationships")):
+        if not isinstance(relationship, dict):
+            continue
+        source_id = str(relationship.get("sourceId") or "")
+        target_id = str(relationship.get("targetId") or "")
+        if source_id not in relevant_ids and target_id not in relevant_ids:
+            continue
+        source = str(relationship.get("source") or "").strip()
+        target = str(relationship.get("target") or "").strip()
+        relation = str(relationship.get("relation") or "").strip()
+        if source and target and relation:
+            relationship_lines.append(f"{target} is {source}'s {relation}")
+    if relationship_lines:
+        parts.append("Relationships: " + "; ".join(_unique_text(relationship_lines)[:6]))
+    return trim_text(" ".join(parts), 800)
+
+
 def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None = None) -> dict[str, Any]:
     story = normalize_story_text(story)
     words = word_count(story)
@@ -2923,6 +3344,7 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
     analysis = build_story_analysis(story, planner_id, job_id)
     characters = list(analysis.get("characters") or [])
     engine = analysis.get("planner") or {"type": "local_rules"}
+    world = analysis.get("world") or {}
     if job_id and engine.get("type") == "ollama":
         job_update(job_id, status="analyzing_story", analysisStage="synthesis")
     global_summary = build_global_story_summary(engine, list(analysis.get("chunks") or []))
@@ -2965,7 +3387,8 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
             absent_names = character_names(absent, characters, 8)
             if job_id and engine.get("type") == "ollama":
                 job_update(job_id, status="writing_panel_prompts", analysisStage="panel_prompts", currentPanel=panel_number)
-            action_text = grounded_panel_text(engine, beat_text, scene, visible_names, absent_names, global_summary)
+            story_context = panel_story_context(global_summary, world, present, absent)
+            action_text = grounded_panel_text(engine, beat_text, scene, visible_names, absent_names, story_context)
             panel = {
                 "id": f"panel_{panel_number:04d}",
                 "panelNumber": panel_number,

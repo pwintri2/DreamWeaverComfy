@@ -218,11 +218,17 @@ function renderCharacterBible(characters) {
           ? `<img class="character-ref" src="${escapeHtml(character.referenceImageUrl)}" alt="Referentie ${escapeHtml(character.name)}">`
           : `<div class="character-ref-placeholder">${refStatus === "rendering" ? "Portret renderen..." : refStatus === "error" ? "Renderen mislukt" : "Geen portret"}</div>`;
         const refLabel = character.referenceImageUrl ? "Nieuw portret" : "Genereer portret";
+        const relationships = (character.relationships || []).slice(0, 3).map((relationship) => {
+          const other = relationship.sourceId === character.id ? relationship.target : relationship.source;
+          const relation = relationship.relation || "relatie";
+          return other ? `${other}: ${relation}` : relation;
+        }).filter(Boolean).join(" · ");
         return `
         <article class="character-card">
           <strong>${escapeHtml(character.name)}</strong>
           <span>${escapeHtml(character.role)} · ${Number(character.mentions || 0)} vermeldingen</span>
           ${refImage}
+          ${relationships ? `<p class="character-relations">${escapeHtml(relationships)}</p>` : ""}
           <p>${escapeHtml(character.visualSignature || "")}</p>
           <button type="button" class="character-ref-btn" data-character-id="${escapeHtml(character.id)}">${refLabel}</button>
         </article>
@@ -241,12 +247,16 @@ function renderStoryBible(comic) {
   const chunks = world.chunkSummaries || [];
   const locations = world.locations || [];
   const objects = world.objects || [];
-  if (!analysis.pipeline && !chunks.length && !locations.length && !objects.length) {
+  const relationships = world.relationships || [];
+  if (!analysis.pipeline && !chunks.length && !locations.length && !objects.length && !relationships.length) {
     target.innerHTML = "";
     return;
   }
   const chunkPreview = chunks.slice(0, 6);
   const globalSummary = analysis.globalSummary || "";
+  const relationshipText = relationships.slice(0, 6)
+    .map((relationship) => `${relationship.source} → ${relationship.target}: ${relationship.relation}`)
+    .join(", ");
   target.innerHTML = `
     <h3>Story Bible</h3>
     ${globalSummary ? `<p class="story-summary">${escapeHtml(globalSummary)}</p>` : ""}
@@ -263,6 +273,10 @@ function renderStoryBible(comic) {
       <article>
         <strong>Objecten</strong>
         <span>${objects.slice(0, 8).map((item) => escapeHtml(item.name)).join(", ") || "geen vaste objecten"}</span>
+      </article>
+      <article>
+        <strong>Relaties</strong>
+        <span>${relationshipText ? escapeHtml(relationshipText) : "geen expliciete relaties"}</span>
       </article>
     </div>
     <details class="bible-details">
