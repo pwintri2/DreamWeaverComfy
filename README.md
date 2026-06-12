@@ -1,106 +1,169 @@
-# Dreamweaver Comfy
+# DreamweaverComfy
 
-Dreamweaver Comfy is een lokale vanilla webapp die de inhoud van het Dreamweaver-plan koppelt aan de bestaande ComfyUI-installatie op deze machine.
+A local-first desktop app that turns long prose stories into A4 comic books. It
+analyses a story in layers, builds a story bible (characters, locations, objects),
+plans scenes/panels/pages, writes a tight image prompt per panel — with explicit
+*visible* and *forbidden* characters — and renders the panels through a local
+[ComfyUI](https://github.com/comfyanonymous/ComfyUI) instance.
 
-## Wat hij doet
+The guiding principle: **the image model must not have to guess the story.** A
+planner first decides who is present, who has left, what is on screen, and what
+must explicitly *not* appear, so each render stays faithful to the text with as
+few hallucinations as possible.
 
-### Stripmodus
+> Built as a Python backend + static web UI, shipped as a [Tauri](https://tauri.app/)
+> desktop shell. The UI is in Dutch; stories are expected in English.
 
-- Accepteert geplakte tekst of `.txt`/Markdown/`.docx`/`.pdf`-upload tot 50.000 woorden.
-- Leest DOCX en tekst-PDF's lokaal uit. Gescande PDF's hebben later nog OCR nodig.
-- Hakt lange teksten eerst in analysechunks, maakt daarna een story bible met samengevoegde personages, locaties, objecten en chunk-samenvattingen.
-- Kan `qwen2.5:latest` of een ander lokaal Ollama-model als verhaalplanner gebruiken; `qwen2.5:latest` wordt automatisch aanbevolen wanneer Ollama hem meldt.
-- Valt per chunk terug op lokale regels als een lokale LLM geen bruikbare JSON teruggeeft.
-- Analyseert personages, scenes, locaties, stemming en verhaalbeats met expliciete cast-continuity.
-- Berekent automatisch panels en A4-pagina's; je hoeft dus geen panel-aantal te kiezen.
-- Maakt per panel een inspecteerbare prompt die het verhaal letterlijk probeert uit te beelden.
-- Rendert panelen één voor één via ComfyUI en vult de A4-pagina's live.
-- Heeft dropdowns voor lokale ComfyUI-workflows en verhaalplanners. API-keys worden niet opgeslagen; cloudopties lezen alleen env-vars wanneer adapters worden aangesloten.
-- Ondersteunde lokale panelrenderers:
-  - Z-Image Turbo als normale image workflow.
-  - Wan 2.2 / Wan 2.1 als korte video waarvan een still als panel wordt gebruikt.
-  - Generieke SD-checkpoints uit `models/checkpoints/` via een basis ComfyUI checkpoint-workflow.
+---
 
-### Droommodus
+## Features
 
-- Neemt een persoonlijke wens als input.
-- Maakt lokaal inspecteerbare metaforische zinnen en beeldprompts.
-- Stuurt de originele wens niet naar ComfyUI.
-- Gebruikt de bestaande ComfyUI helpers:
-  - `/home/pwintri2/ComfyUI/wan_prompt_page.py`
-  - `/home/pwintri2/ComfyUI/image_prompt_page.py`
-- Gebruikt de huidige modelsets wanneer aanwezig:
-  - Wan 2.2 14B text-to-video
-  - Wan 2.1 1.3B text-to-video
-  - Z-Image Turbo text-to-image slideshow
+- **Layered story planner** (`chunked_story_bible_v1`): long text is split into
+  analysis chunks → characters, locations, objects, events → canonical character
+  cards → world/story bible → scenes → panels → A4 pages.
+- **Cast continuity per panel**: each panel carries explicit `characterIds`,
+  `absentCharacterIds` and `exitingCharacterIds`. Departures and empty scenes are
+  detected so off-screen characters are kept out of frame.
+- **Grounded panel prompts**: with an LLM planner, every beat is distilled into a
+  compact, visual-only English image prompt ("draw only what is visible"), with a
+  strict fallback to the raw beat on any sign of hallucination.
+- **Cast-locked seeds**: the render seed is derived from the visible cast, so a
+  recurring character renders more consistently across panels.
+- **Clean prompt separation**: all negations live in the negative prompt (diffusion
+  models follow "do not" cues poorly in the positive prompt).
+- **Dialogue extraction**: quoted lines are extracted per panel and attributed to
+  the nearest speaker (foundation for speech balloons).
+- **Story understanding**: a global synthesis pass plus scene context feed the
+  grounding step (used only to resolve pronouns/ambiguity, never copied into a panel).
+- **Editor**: edit a panel's positive/negative prompt and re-render a single panel;
+  generate a reference portrait per character.
+- **Pluggable planners**: fast local rules, local **Ollama** models, or cloud
+  **OpenAI / Anthropic / Gemini** via an in-app API-keys page.
+- **Document input**: `.txt`, `.md`, `.docx`, and text-based PDF.
 
-## Ontwikkelmodus
+## Planners
 
-Start eerst ComfyUI, of gebruik de knop in de app:
+| Planner | Needs | Notes |
+| --- | --- | --- |
+| Local rules | nothing | No model, no network, no key. Fastest, least understanding. |
+| Ollama | a running Ollama with a model (e.g. `qwen2.5`) | Story text stays local. |
+| OpenAI / Anthropic / Gemini | an API key | Best understanding; text is sent to the provider. |
+
+API keys are managed in the app (gear menu → **API-keys koppelen…**) and stored
+locally in `data/secrets.json` (gitignored, `chmod 600`). Saved keys take
+precedence over environment variables. Keys are never returned in full by the API,
+and never placed in job state or logs.
+
+## Image / video models (ComfyUI)
+
+Rendering uses the models installed in your ComfyUI:
+
+- **Z-Image Turbo** (`diffusion_models/z_image_turbo_bf16.safetensors`) — text→image.
+- **Wan 2.1 / 2.2** — text→video, one still per panel.
+- Generic SD/SDXL checkpoints from `models/checkpoints/` (if present).
+
+> Note: true identity-lock (IP-Adapter / InstantID) is **not** supported on the
+> Z-Image/Wan stack — those adapters target SD1.5/SDXL and require models/nodes
+> that are not part of this setup.
+
+## Requirements
+
+- Python 3.11+
+- A running ComfyUI (default `http://127.0.0.1:8188`) with the panel-helper modules
+  (`image_prompt_page.py`, `wan_prompt_page.py`) available in the ComfyUI folder.
+- Optional: [Ollama](https://ollama.com/) for a local LLM planner.
+- Optional: Node.js + [Tauri](https://tauri.app/) toolchain to build the desktop app.
+
+## Getting started
+
+Run the backend + web UI directly:
 
 ```sh
-cd /home/pwintri2/ComfyUI
-.venv/bin/python main.py --listen 127.0.0.1 --port 8188
+cd DreamweaverComfy
+python3 server.py --host 127.0.0.1 --port 8791
+# open http://127.0.0.1:8791
 ```
 
-Start daarna Dreamweaver:
+Run as a Tauri desktop app:
 
 ```sh
-cd /home/pwintri2/DreamweaverComfy
-./scripts/run-dev.sh
-```
-
-Open anders handmatig:
-
-```text
-http://127.0.0.1:8788
-```
-
-## Flatpak
-
-De manifest staat in `ai.wintrip.Dreamweaver.yml`.
-
-```sh
-cd /home/pwintri2/DreamweaverComfy
-./scripts/build-flatpak.sh
-flatpak run ai.wintrip.Dreamweaver
-```
-
-De Flatpak krijgt netwerktoegang voor `127.0.0.1:8188` en read-only home-toegang zodat hij de bestaande ComfyUI helperbestanden en modelinventaris kan lezen.
-
-## Tauri desktop-app
-
-Deze map bevat ook een Tauri desktop-shell met eigen venster en icoon.
-
-Ontwikkelmodus:
-
-```sh
-cd /home/pwintri2/DreamweaverComfy
 npm install
-npm run tauri:dev
+npm run tauri:dev      # development
+npm run tauri:build    # build installer (.deb under src-tauri/target/release/bundle/)
 ```
 
-Installer bouwen:
+### Typical workflow
+
+1. Paste or upload a story (English).
+2. Pick a **Verhaalplanner** (planner): local rules, an Ollama model, or a cloud
+   provider (couple a key first).
+3. Run **Alleen storyboard** (storyboard only) first — this plans everything
+   without using the GPU, so you can review the story bible, cast, dialogue and
+   per-panel prompts.
+4. Render panels (Z-Image or Wan). ComfyUI and Ollama share VRAM, so render one at
+   a time on small GPUs.
+5. In the editor, tweak prompts or regenerate individual panels.
+
+Useful environment variables:
 
 ```sh
-cd /home/pwintri2/DreamweaverComfy
-./scripts/build-tauri.sh
+COMFYUI_URL=http://127.0.0.1:8188
+OLLAMA_URL=http://127.0.0.1:11434
+OLLAMA_PLANNER_TIMEOUT=180
+OLLAMA_PANEL_PROMPT_TIMEOUT=60
+OPENAI_MODEL=gpt-4o-mini
+ANTHROPIC_MODEL=claude-haiku-4-5-20251001
+GEMINI_MODEL=gemini-2.0-flash
 ```
 
-De Debian-installer komt hier terecht:
+## HTTP API (selected)
 
 ```text
-/home/pwintri2/DreamweaverComfy/src-tauri/target/release/bundle/deb/Dreamweaver Comfy_0.2.4_amd64.deb
+POST /api/comic                      start a storyboard/comic job
+GET  /api/jobs/{id}                  job status + comic plan
+POST /api/comic/update-panel         edit a panel's prompt
+POST /api/comic/regenerate-panel     re-render a single panel
+POST /api/comic/character-reference  generate a character portrait
+GET  /api/secrets                    provider status (masked keys)
+POST /api/secrets                    save/remove an API key
+GET  /api/status                     version, ComfyUI status, models, planners
+POST /api/extract-text               extract text from an uploaded document
 ```
 
-De Tauri-app bundelt de Dreamweaver UI en bridge, maar niet de enorme ComfyUI modellen. Hij gebruikt de bestaande lokale ComfyUI-installatie in `/home/pwintri2/ComfyUI`.
+## Known limitations
 
-## Praktische beperking
+- **Image–story fidelity is still imperfect.** Grounding and cast rules help, but
+  text-to-image on Z-Image stays relatively loose versus the description. Strong
+  fidelity needs reference-image conditioning, ControlNet, or a different base model.
+- **Character extraction over-detects.** Some non-persons (objects, places, stray
+  words) can still be picked up as characters, which makes per-character portraits
+  unreliable. Hardening this is the top priority.
+- **Speech balloons are not rendered yet.** Dialogue is extracted into the panel
+  data (`panel.dialogue`) but not yet drawn as an overlay.
+- **No identity-lock / IP-Adapter** on the current model stack (see above).
+- **No OCR** for scanned PDFs.
 
-Een verhaal van 50.000 woorden kan honderden panelen opleveren. De analyse is snel, maar volledig renderen kan uren duren afhankelijk van model, resolutie en GPU. Gebruik `Alleen storyboard` om eerst de panelindeling en prompts te controleren.
+## Security
 
-Met `qwen2.5:latest` als planner kan de analyse ook merkbaar langer duren, vooral bij de eerste Ollama-aanroep of bij veel chunks. De standaard timeout per chunk is 180 seconden en kan worden aangepast met:
+- API keys live only in `data/secrets.json` (gitignored, owner-readable). Do not
+  commit secrets.
+- Cloud planners send your story text to the selected provider — the Story Bible
+  shows a note when this happens. Local rules and Ollama keep everything local.
 
-```sh
-export OLLAMA_PLANNER_TIMEOUT=240
+## Project layout
+
+```text
+server.py     backend: extraction, ComfyUI bridge, planner, dialogue, cloud
+              adapters, secrets, job status, panel/portrait rendering
+index.html    UI structure
+main.js       UI logic (upload, planner/model dropdowns, polling, editor)
+api.js        frontend API wrapper
+styles.css    layout for pages, panels, character/story bible, API-keys page
+src-tauri/    Tauri desktop shell
+HANDOFF.md    current status and next steps
 ```
+
+## License
+
+No license has been chosen yet; treat as all-rights-reserved unless a `LICENSE`
+file is added.
