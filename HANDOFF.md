@@ -118,6 +118,21 @@ export GEMINI_MODEL=gemini-2.0-flash
   dispatcher; een gekoppelde cloud-key verbetert het begrip overal. Per-chunk
   graceful fallback naar lokale regels bij fouten.
 
+### Karakterextractie verharden + stripbeeld-trouw (follow-up 2026-06-12)
+- **Alleen echte personages in bible & portretten**:
+  - Uitgebreide `NON_CHARACTER_NAME_WORDS` (voices, shadows, dreams, machines, times, emotions, common nouns etc.).
+  - Nieuwe `is_likely_real_person(name, story)` helper met actie/attributie context scan + heuristieken.
+  - Strengere poorten in `extract_character_names` (hogere score drempels), `sanitize_character_candidate_name` (roept is_likely aan), en vooral in `merge_character_cards` (finale filter op alle kandidaten).
+  - LLM chunk-analyse system prompt + schema sterk aangescherpt: "ONLY real persons/animals that speak/act; NEVER objects/places/concepts... If in doubt, omit."
+  - Resultaat: Character Bible toont (en portret-knoppen gelden alleen voor) echte karakters. Niet-personen worden actief uit de cast en uit portret-generatie gehouden.
+- **Betere plaatjes-verhaal-overeenkomst (prompt engineering)**:
+  - `llm_panel_visual_prompt`: veel strengere systeem-instructie + user prompt over exacte visible cast (no extras, empty=zero humans).
+  - `grounded_panel_text`: extra post-check die grounded visual rejecteert (fallback naar raw beat) als er een onbekende capitalized naam in zit die niet in visible cast voorkomt.
+  - `build_panel_prompt`: cast_rule nu "STRICT CAST: ONLY ... visible ... no other people..."; expliciete obey-clausule aan eind.
+  - `build_panel_negative_prompt` + globale `COMIC_NEGATIVE_PROMPT`: veel meer "extra person / stray face / unlisted character / background human" verboden, plus als present_ids bekend: "any human not listed in positive".
+  - Karakter continuityPrompts en reference prompts benadrukken "this character only / one single person / no other people".
+  - Deze changes maken de gegenereerde prompts veel explicieter over "wie wel / wie niet", wat de trouw aan het geplande verhaal verbetert binnen de limieten van Z-Image/Wan txt2img (geen echte reference injection mogelijk).
+
 ## Wat werkt
 
 - Storyboard-pipeline (`chunked_story_bible_v1`): chunks → personages → world
@@ -132,18 +147,10 @@ export GEMINI_MODEL=gemini-2.0-flash
 
 ## Wat NOG NIET (goed) werkt — eerlijke staat
 
-- **Plaatjes komen nog steeds niet betrouwbaar overeen met het verhaal.** De
-  grounding + cast-regels helpen, maar txt2img op Z-Image blijft vrij/los t.o.v.
-  de beschrijving. Echte beeld-naar-verhaal-trouw vraagt sterkere conditionering
-  (referentiebeeld-injectie / ControlNet / een ander basismodel).
-- **Referentieportretten werken nog niet bruikbaar.** Twee oorzaken:
-  1. **Karakterextractie ziet te veel als "persoon".** Niet-personen
-     (objecten, plekken, losse woorden) belanden nog als personage in de bible,
-     dus er worden portretten voor niet-personages gemaakt. De blocklist is
-     uitgebreid maar dekt niet alles; dit heeft echt aandacht nodig (betere
-     persoon-detectie, evt. via de LLM-planner met strengere validatie).
-  2. Zelfs een correct portret wordt **niet in de panels geïnjecteerd** (geen
-     img2img/IP-Adapter), dus het stuurt het beeld niet.
+- **Plaatjes komen nog steeds niet 100% overeen met het verhaal.** Grounding + cast-regels + strikte positive/negative cast-enforcement helpen significant (zie recente aanscherpingen), maar txt2img op Z-Image/Wan blijft relatief los t.o.v. de beschrijving. Echte pixel-trouwe beeld-naar-verhaal fidelity vraagt nog altijd sterkere conditionering (IP-Adapter etc. — niet beschikbaar op huidige model-stack).
+- **Referentieportretten zijn nu veel bruikbaarder (alleen echte personages).**
+  1. **Karakterextractie is sterk verhard** (is_likely_real_person + uitgebreide NON_CHARACTER_NAME_WORDS + score-gates in extract + sanitize + final merge filter + LLM system prompt). Alleen echte acterende/sprekende personen of dieren (met context-signalen) komen in de Story Bible / Character Bible en krijgen portret-knoppen. Objecten, locaties, abstracten, voices/shadows etc. worden actief geweerd. (Was top priority.)
+  2. Portret wordt nog steeds **niet in de panels geïnjecteerd** (geen img2img/IP-Adapter op Z-Image stack), dus portretten dienen puur als referentie/visuele bible.
 - **Tekstballonnen (#3) zijn NOG NIET gebouwd.** Alleen de data (`panel.dialogue`)
   wordt gevuld; er is nog geen overlay-rendering. Daarom zie je geen ballonnen.
 - **Cloud-planner live niet end-to-end getest** met een echte betaalde call
@@ -182,12 +189,11 @@ POST /api/extract-text               documentextractie
 
 ## Volgende logische stappen
 
-1. **Karakterextractie verharden** zodat alleen echte personen personages worden
-   (de "ziet van alles als persoon"-bug). Dit blokkeert bruikbare portretten.
+1. ~~**Karakterextractie verharden**~~ — grotendeels opgelost in deze follow-up (is_likely_real_person + multi-laags filter + LLM-strict + blocklist). Nog steeds monitoren op edge cases in exotische verhalen (personificaties, rare diernamen etc.).
 2. **#3 Tekstballonnen**: `panel.dialogue` als HTML/SVG-overlay op de panels
    renderen (auto-plaatsing + bewerkbaar, meegenomen in print/export).
 3. **Beeld-naar-verhaal-trouw** verhogen: referentiebeeld-injectie of een
-   SDXL+IP-Adapter-traject (optie 2 — eerst installplan, grote downloads).
+   SDXL+IP-Adapter-traject (optie 2 — eerst installplan, grote downloads). Prompt-verbeteringen (cast-strict + grounded-gates) helpen maar kunnen de limiet van de huidige Z-Image/Wan stack niet volledig overwinnen.
 4. Cloud-planner live end-to-end testen met een echte key; kosten/latency meten.
 5. In-app modellen downloaden (keuze a) + app-versie ophogen + OCR.
 

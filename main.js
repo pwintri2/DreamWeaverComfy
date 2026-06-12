@@ -662,7 +662,8 @@ function bindEvents() {
   const storyInput = document.getElementById("storyInput");
   storyInput.addEventListener("input", updateStoryCount);
   document.getElementById("storyFileInput").addEventListener("change", async (event) => {
-    const file = event.currentTarget.files?.[0];
+    const input = event.currentTarget;
+    const file = input?.files?.[0];
     if (!file) return;
     try {
       showToast(`${file.name} uitlezen...`);
@@ -674,7 +675,7 @@ function bindEvents() {
     } catch (error) {
       showToast(error.message, 6200);
     } finally {
-      event.currentTarget.value = "";
+      if (input) input.value = "";
     }
   });
 

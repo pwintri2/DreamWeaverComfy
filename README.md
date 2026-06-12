@@ -132,12 +132,8 @@ POST /api/extract-text               extract text from an uploaded document
 
 ## Known limitations
 
-- **Image–story fidelity is still imperfect.** Grounding and cast rules help, but
-  text-to-image on Z-Image stays relatively loose versus the description. Strong
-  fidelity needs reference-image conditioning, ControlNet, or a different base model.
-- **Character extraction over-detects.** Some non-persons (objects, places, stray
-  words) can still be picked up as characters, which makes per-character portraits
-  unreliable. Hardening this is the top priority.
+- **Image–story fidelity is improved but still imperfect.** Stricter cast rules, grounded distillation with hallucination gates, and heavy negative-prompt enforcement on extra people help a lot (see server.py changes), but text-to-image on Z-Image/Wan remains relatively loose. True strong fidelity needs reference-image conditioning, ControlNet, or a different base model (IP-Adapter not available on this stack).
+- **Character extraction is now hardened.** Only real persons/animals that act or speak survive to the Character Bible and portrait buttons. Non-persons (objects, places, concepts, shadows/voices/etc.) are filtered via blocklists, context scoring, `is_likely_real_person`, and LLM strictness. Portraits are now reliably only for actual characters.
 - **Speech balloons are not rendered yet.** Dialogue is extracted into the panel
   data (`panel.dialogue`) but not yet drawn as an overlay.
 - **No identity-lock / IP-Adapter** on the current model stack (see above).

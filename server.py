@@ -19,6 +19,7 @@ import mimetypes
 import os
 import random
 import re
+import bisect
 import subprocess
 import tempfile
 import threading
@@ -43,6 +44,9 @@ DEFAULT_COMFY_URL = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188").rstri
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_PLANNER_TIMEOUT = float(os.environ.get("OLLAMA_PLANNER_TIMEOUT", "180"))
 OLLAMA_PANEL_PROMPT_TIMEOUT = float(os.environ.get("OLLAMA_PANEL_PROMPT_TIMEOUT", "60"))
+COMFY_IMAGE_TIMEOUT = float(os.environ.get("DREAMWEAVER_COMFY_IMAGE_TIMEOUT", "600"))
+COMFY_VIDEO_TIMEOUT = float(os.environ.get("DREAMWEAVER_COMFY_VIDEO_TIMEOUT", "3600"))
+COMFY_MISSING_HISTORY_GRACE = float(os.environ.get("DREAMWEAVER_COMFY_MISSING_HISTORY_GRACE", "20"))
 
 LLM_ENGINE_TYPES = {"ollama", "openai", "anthropic", "google"}
 DEFAULT_OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
@@ -83,7 +87,8 @@ LOCAL_MODEL_EXTENSIONS = {".safetensors", ".ckpt", ".pt", ".pth", ".bin"}
 COMIC_NEGATIVE_PROMPT = (
     "watermark, readable text, letters, captions, speech bubbles, subtitles, logo, "
     "low quality, blurry, distorted face, deformed hands, extra fingers, missing fingers, "
-    "extra limbs, fused limbs, duplicate character, inconsistent character design, nsfw, nude"
+    "extra limbs, fused limbs, duplicate character, inconsistent character design, nsfw, nude, "
+    "extra unnamed person, background stranger, unlisted face, stray silhouette, unwanted extra character"
 )
 
 
@@ -93,6 +98,9 @@ NAME_BLOCKLIST = {
     "Hij", "Hoe", "Hun", "Ik", "In", "Is", "Later", "Maar", "Met", "Na",
     "Naast", "Niet", "Of", "Om", "Omdat", "Onder", "Ondertussen", "Op", "Over", "The", "Toen", "Tot",
     "Tussen", "Uit", "Van", "Voor", "Waar", "Wat", "We", "Ze", "Zij", "Zijn",
+    # Pronouns that often appear capitalized at start of sentences or in dialogue - never character names
+    "They", "You", "Me", "He", "She", "Us", "Them", "It", "My", "Your", "His", "Her", "Their", "Our", "Its", "I",
+    "Jij", "Jou", "Wij", "Ons",
 }
 
 NON_CHARACTER_NAME_WORDS = {
@@ -100,11 +108,11 @@ NON_CHARACTER_NAME_WORDS = {
     "apartment", "around", "as", "at", "away", "back", "balcony", "bed", "before", "behind", "below",
     "between", "book", "box", "bridge", "building", "but", "camera", "car", "chair", "city", "clock",
     "corridor", "couch", "cup", "darkness", "day", "desk", "door", "down", "each", "elevator", "every",
-    "everything", "floor", "for", "from", "garden", "gate", "hall", "hallway", "hand", "here", "home",
+    "everything", "floor", "for", "from", "garden", "gate", "hall", "hallway", "hand", "hands", "here", "home",
     "house", "inside", "into", "key", "kitchen", "letter", "light", "look", "looks", "looking", "moon",
     "morning", "night", "no", "nothing", "now", "of", "off", "office", "old", "once", "only", "open",
-    "opens", "outside", "over", "paper", "phone", "room", "shadow", "sky", "something", "stairs",
-    "street", "table", "that", "the", "then", "there", "thing", "this", "through", "to", "today",
+    "opens", "outside", "over", "paper", "phone", "room", "shadow", "shadows", "silence", "sky", "something", "stairs",
+    "street", "table", "that", "the", "then", "there", "thing", "things", "this", "through", "to", "today",
     "tomorrow", "under", "up", "wall", "window", "with", "without",
     "are", "was", "were", "been", "being", "does", "did", "will", "would", "can", "could", "shall",
     "should", "may", "might", "must", "have", "has", "had", "why", "what", "when", "where", "who",
@@ -115,6 +123,19 @@ NON_CHARACTER_NAME_WORDS = {
     "klok", "licht", "lucht", "maan", "morgen", "muur", "nacht", "niets", "nu", "onder", "poort",
     "sleutel", "stad", "stoel", "straat", "tafel", "telefoon", "trap", "tuin", "vandaag", "vloer",
     "voor", "weg", "woning",
+    "voice", "voices", "echo", "echoes", "figure", "figures", "silhouette", "silhouettes", "shade", "shades",
+    "dream", "dreams", "memory", "memories", "thought", "thoughts", "idea", "ideas", "fear", "fears",
+    "hope", "hopes", "soul", "spirit", "ghost", "phantom", "machine", "device", "robot", "computer",
+    "time", "moment", "instant", "hour", "minute", "second", "dawn", "dusk", "evening", "noon", "midnight",
+    "future", "past", "present", "fate", "destiny", "death", "life", "love", "world", "earth", "universe",
+    "god", "gods", "angel", "demon", "devil", "wind", "rain", "storm", "fire", "flame", "wave", "sea",
+    "sun", "moon", "star", "stars", "cloud", "clouds", "creature", "being",
+    # Pronouns (lowercase) - must never become character names
+    "they", "them", "their", "theirs", "you", "your", "yours", "he", "him", "his", "she", "her", "hers",
+    "we", "us", "our", "ours", "me", "my", "mine", "i", "it", "its",
+    "jij", "jou", "jouw", "wij", "ons", "onze", "mij", "mijn", "ik",
+    # Reliable non-person brands/systems (Muzak is almost never a character name)
+    "muzak", "spotify",
 }
 
 PERSON_ACTION_WORDS = {
@@ -128,6 +149,13 @@ PERSON_ACTION_WORDS = {
     "grijpt", "greep", "hoort", "hoorde", "huilt", "keert", "keek", "kijkt", "lacht", "liep", "loopt",
     "luistert", "opent", "opende", "pakt", "pakte", "rent", "rende", "roept", "riep", "staat", "stond",
     "vertrekt", "vertrok", "vraagt", "vroeg", "wacht", "wachtte", "zegt", "zei", "ziet", "zag", "zit", "zat",
+    # more common actions for better character detection
+    "found", "read", "decided", "appeared", "warned", "kept", "studied", "discovered", "met", "talked",
+    "opened", "wrote", "learned", "realized", "chose", "picked", "took", "gave", "showed", "told",
+    "searched", "hid", "fought", "jumped", "climbed", "pushed", "pulled", "threw", "caught", "understood",
+    "knew", "believed", "hoped", "feared", "loved", "hated", "helped", "saved", "killed", "died", "lived",
+    "vond", "las", "besloot", "verscheen", "waarschuwde", "bewaarde", "bestudeerde", "ontdekte", "ontmoette", "praatte",
+    "opende", "schreef", "leerde", "besefte", "koos", "pakte", "nam", "gaf", "toonde", "vertelde",
 }
 
 ATTRIBUTION_WORDS = {
@@ -1167,6 +1195,119 @@ def name_candidate_blocked(name: str) -> bool:
     return any(part in blocklist for part in parts)
 
 
+def is_likely_real_person(name: str, story_text: str,
+                            precomputed_action_pos: list[int] | None = None,
+                            precomputed_neg_pos: list[int] | None = None) -> bool:
+    """Return True only if this looks like a genuine acting/speaking character (person or animal being), not object/place/concept.
+
+    If precomputed_*_pos lists are provided (from a single pass over the story), the expensive context
+    scanning becomes much faster (bisect instead of repeated full-text searches + long any() on windows).
+    This is the main source of added latency from "understanding contexts" for accurate character vs
+    place/brand filtering.
+    """
+    if not name or name in {"Narrator", "Protagonist"}:
+        return True
+    lname = canonical_element_key(name)
+    if not lname or lname in NON_CHARACTER_NAME_WORDS:
+        return False
+    # Hard block: never treat pure pronouns as character names (they, you, me, he, she etc. often start sentences or get actions)
+    pronoun_block = {
+        "they", "them", "their", "theirs", "you", "your", "yours", "he", "him", "his",
+        "she", "her", "hers", "we", "us", "our", "ours", "me", "my", "mine", "i", "it", "its",
+        "jij", "jou", "jouw", "wij", "ons", "onze", "mij", "mijn", "ik", "hij", "zij", "ze", "hun",
+    }
+    if lname in pronoun_block:
+        return False
+    # Reject very generic single nouns that are rarely proper character names.
+    # Keep "muzak" (almost always the brand/music system) but do not hard-block generic place names
+    # like "granville" here — a person can be named Granville, and context should decide.
+    common_non_person = {
+        "voice", "echo", "figure", "silhouette", "shadow", "shade", "dream", "memory", "thought",
+        "machine", "device", "robot", "computer", "time", "moment", "fate", "death", "life", "love",
+        "world", "earth", "god", "angel", "wind", "rain", "storm", "fire", "sea", "sun", "moon",
+        "star", "creature", "being", "silence", "darkness", "light", "heart", "mind", "soul",
+        # Very reliable non-persons
+        "muzak", "spotify",
+    }
+    if lname in common_non_person:
+        return False
+
+    # Evidence-based check. When precomputed position lists are supplied we use fast bisect
+    # lookups instead of rescanning the whole story for every candidate. This is the key
+    # optimization for the "understanding contexts" logic that was making analysis slow on long stories.
+    pattern = re.compile(rf"\b{re.escape(name.split()[0])}\b", re.IGNORECASE)
+    strong_person_signals = 0
+    has_strong_negative_cue = False
+
+    place_cues = {"town of", "city of", "village of", "in the town", "in the city", "the town", "the city",
+                  "the village", "the street", "the building", "the hotel", "the store"}
+    brand_music_cues = {"the muzak", "muzak played", "muzak in the", "background music", "elevator music",
+                        "piped music", "the system played"}
+
+    # Limit to first ~8 occurrences for speed on long stories; that's enough to detect clear personhood
+    matches = list(pattern.finditer(story_text))[:8]
+    for match in matches:
+        npos = match.start()
+
+        # Use precomputed positions + bisect when available (much faster than building windows + any() over long verb lists)
+        has_person_in_this_window = False
+        if precomputed_action_pos:
+            i = bisect.bisect_left(precomputed_action_pos, npos - 70)
+            if i < len(precomputed_action_pos) and precomputed_action_pos[i] <= npos + 90:
+                strong_person_signals += 2
+                has_person_in_this_window = True
+        else:
+            # fallback (slow path)
+            start = max(0, npos - 70)
+            end = min(len(story_text), npos + 90)
+            window = story_text[start:end].lower()
+            if any(v in window for v in (" said", " says", " asked", " asks", " replied", " whispers", " shouted",
+                                         " walked up", " ran to", " stood", " sat down", " looked at", " smiled at",
+                                         " cried", " entered the room", " left the", " turned to", " felt", " knew",
+                                         " saw", " heard", " 's face", " 's hand", " 's eyes", " spoke to", " turned and",
+                                         " found", " read", " decided", " appeared", " warned", " kept", " talked",
+                                         " smiled", " met", " opened", " closed", " studied", " wrote", " discovered",
+                                         " ran", " walked", " sat", " stood", " looked", " smiled", " cried", " entered",
+                                         " left", " turned", " felt", " thought", " saw", " heard")):
+                strong_person_signals += 2
+                has_person_in_this_window = True
+
+        # pronoun check is cheap (small window or we can precompute too, but this is fine)
+        start = max(0, npos - 70)
+        end = min(len(story_text), npos + 90)
+        window = story_text[start:end].lower()
+        if re.search(r"\b(he|she|they|his|her|their|him|hij|zij|ze)\b", window):
+            strong_person_signals += 1
+            has_person_in_this_window = True
+
+        # negative cues
+        if precomputed_neg_pos:
+            i = bisect.bisect_left(precomputed_neg_pos, npos - 70)
+            if i < len(precomputed_neg_pos) and precomputed_neg_pos[i] <= npos + 90:
+                if not has_person_in_this_window:
+                    has_strong_negative_cue = True
+        else:
+            if (any(cue in window for cue in place_cues) or any(cue in window for cue in brand_music_cues)) and not has_person_in_this_window:
+                has_strong_negative_cue = True
+
+    is_multi_word = len(name.split()) >= 2
+
+    # Balanced rules:
+    # - A single clear person signal (e.g. "Granville said" or "Granville walked up to her") is enough for inclusion.
+    # - Only reject on negative cue if there is almost no person evidence.
+    if has_strong_negative_cue and strong_person_signals < 1:
+        return False
+
+    if strong_person_signals >= 1 or is_multi_word:
+        return True
+
+    # Final gate for very weak cases
+    first = lname.split()[0] if lname.split() else lname
+    if first in NON_CHARACTER_NAME_WORDS:
+        return False
+    return False
+
+
 def extract_character_names(text: str) -> list[tuple[str, int]]:
     counts: dict[str, int] = {}
     context_scores: dict[str, int] = {}
@@ -1198,17 +1339,19 @@ def extract_character_names(text: str) -> list[tuple[str, int]]:
 
     ordered = sorted(compact.items(), key=lambda item: (-item[1], compact_first_seen[item[0]]))
     repeated = [(name, count) for name, count in ordered if count >= 2]
+    # Harden: only accept repeated if they have at least minimal context signal somewhere, or are strong singles
+    repeated = [(name, count) for name, count in repeated if context_scores.get(name, 0) > 0 or count >= 3]
     if len(repeated) >= 3:
         singles = [
             (name, count)
             for name, count in ordered
-            if count == 1 and context_scores.get(name, 0) > 0
+            if count == 1 and context_scores.get(name, 0) >= 2
         ][: max(0, 18 - len(repeated))]
         return (repeated + singles)[:18]
     return [
         (name, count)
         for name, count in ordered
-        if count >= 2 or context_scores.get(name, 0) > 0
+        if (count >= 2 and context_scores.get(name, 0) > 0) or context_scores.get(name, 0) >= 2
     ][:18]
 
 
@@ -1243,7 +1386,7 @@ def build_character_cards(text: str, sentences: list[str]) -> list[dict[str, Any
                 "visualSignature": visual_signature,
                 "continuityPrompt": (
                     f"{name}: consistent realistic anime character, {visual_signature}, "
-                    "same face and outfit whenever this character is visible"
+                    "same face, age, gender, body, hair and outfit every single time this character is visible; this character only, no other people"
                 ),
                 "evidence": [trim_text(context, 180) for context in contexts],
             }
@@ -1803,12 +1946,22 @@ def infer_character_gender(name: str, contexts: list[str]) -> str:
     return "unknown"
 
 
-def sanitize_character_candidate_name(name: str, story_text: str) -> str | None:
+def sanitize_character_candidate_name(name: str, story_text: str,
+                                        precomputed_action_pos: list[int] | None = None,
+                                        precomputed_neg_pos: list[int] | None = None) -> str | None:
     cleaned = re.sub(r"\s+", " ", str(name or "").strip(" \t\r\n\"'“”"))
     cleaned = re.sub(r"^(?:character|personage|naam|name)\s*[:#-]\s*", "", cleaned, flags=re.IGNORECASE).strip()
     if not cleaned:
         return None
     lower = cleaned.lower()
+    # Explicit pronoun block (in addition to NAME_BLOCKLIST / NON list)
+    pronoun_block = {
+        "they", "them", "their", "theirs", "you", "your", "yours", "he", "him", "his",
+        "she", "her", "hers", "we", "us", "our", "ours", "me", "my", "mine", "i", "it", "its",
+        "jij", "jou", "jouw", "wij", "ons", "onze", "mij", "mijn", "ik", "hij", "zij", "ze", "hun",
+    }
+    if lower in pronoun_block:
+        return None
     if lower in {"narrator", "verteller", "ik", "i", "me", "mij"}:
         return "Narrator" if lower_word_set(story_text) & FIRST_PERSON_WORDS else None
     if len(cleaned) > 70 or len(cleaned.split()) > 4:
@@ -1825,6 +1978,12 @@ def sanitize_character_candidate_name(name: str, story_text: str) -> str | None:
         return None
     first = parts[0]
     if cleaned != "Narrator" and not re.search(rf"\b{re.escape(first)}\b", story_text, re.IGNORECASE):
+        return None
+    # New hard gate: must look like a real person/character
+    if cleaned not in {"Narrator", "Protagonist"} and not is_likely_real_person(
+            cleaned, story_text or "",
+            precomputed_action_pos=precomputed_action_pos,
+            precomputed_neg_pos=precomputed_neg_pos):
         return None
     return cleaned
 
@@ -2011,15 +2170,17 @@ def planner_generate_json(
 def llm_story_chunk_analysis(engine: dict[str, Any], chunk: dict[str, Any], known_names: list[str]) -> dict[str, Any]:
     system_prompt = (
         "You are a strict comic-book story planner. Return valid JSON only. "
-        "As a character, list only real persons/animals/beings actually present in this text. "
-        "Objects, places, actions and stray words are never characters. "
-        "Use short, concrete visual facts and never invent new plot."
+        "As a character, list ONLY real persons, animals or named sentient beings that speak, act or are referred to with he/she/they pronouns in this text. "
+        "Use the actual proper name of the character. NEVER output a pronoun (they, you, me, he, she, we, i, it, jij, jou etc.) as a 'name'. "
+        "Be conservative about objects, places, brands and concepts, but when a capitalized name clearly performs actions, speaks, or has agency, include it as a character (real people can have place-like or unusual names). "
+        "Reject obvious non-persons: brand names like Muzak when used as music/system, pure place descriptions without person agency. "
+        "If the text uses only pronouns for someone, try to resolve to a proper name from context or omit. Prefer including clearly named individuals over omitting. Use short, concrete visual facts and never invent new plot."
     )
     schema_hint = {
         "summary": "short summary of this passage",
         "characters": [
             {
-                "name": "exact name or Narrator",
+                "name": "exact proper name or 'Narrator' (real persons/animals with agency; include clearly named characters even if name resembles a place; avoid pronouns, pure brands as music, obvious non-persons)",
                 "aliases": ["optional"],
                 "gender": "female|male|nonbinary|unknown",
                 "visualClues": "only if the text gives evidence",
@@ -2048,7 +2209,9 @@ def llm_story_chunk_analysis(engine: dict[str, Any], chunk: dict[str, Any], know
     return planner_generate_json(engine, system_prompt, user_prompt)
 
 
-def merge_llm_chunk_analysis(rule_analysis: dict[str, Any], llm_analysis: dict[str, Any], chunk_text: str) -> dict[str, Any]:
+def merge_llm_chunk_analysis(rule_analysis: dict[str, Any], llm_analysis: dict[str, Any], chunk_text: str,
+                               precomputed_action_pos: list[int] | None = None,
+                               precomputed_neg_pos: list[int] | None = None) -> dict[str, Any]:
     merged = dict(rule_analysis)
     summary = text_field(llm_analysis, ["summary", "samenvatting"])
     if 4 <= word_count(summary) <= 90:
@@ -2056,7 +2219,9 @@ def merge_llm_chunk_analysis(rule_analysis: dict[str, Any], llm_analysis: dict[s
 
     character_candidates = list(merged.get("characterCandidates") or [])
     for item in safe_list(llm_analysis.get("characters") or llm_analysis.get("characterCandidates")):
-        name = sanitize_character_candidate_name(text_field(item, ["name", "naam"]), chunk_text)
+        name = sanitize_character_candidate_name(text_field(item, ["name", "naam"]), chunk_text,
+                                                 precomputed_action_pos=precomputed_action_pos,
+                                                 precomputed_neg_pos=precomputed_neg_pos)
         if not name:
             continue
         evidence = safe_list(item.get("evidence") if isinstance(item, dict) else None)
@@ -2145,7 +2310,9 @@ def planner_engine(planner_id: str) -> dict[str, Any]:
     }
 
 
-def analyze_story_chunk(chunk: dict[str, Any], engine: dict[str, Any], known_names: list[str]) -> dict[str, Any]:
+def analyze_story_chunk(chunk: dict[str, Any], engine: dict[str, Any], known_names: list[str],
+                          precomputed_action_pos: list[int] | None = None,
+                          precomputed_neg_pos: list[int] | None = None) -> dict[str, Any]:
     rule_analysis = rule_story_chunk_analysis(chunk)
     if engine.get("type") not in LLM_ENGINE_TYPES:
         return rule_analysis
@@ -2153,7 +2320,9 @@ def analyze_story_chunk(chunk: dict[str, Any], engine: dict[str, Any], known_nam
         llm_analysis = llm_story_chunk_analysis(engine, chunk, known_names)
         if not llm_analysis:
             raise ValueError("Planner gaf geen JSON-object terug.")
-        return merge_llm_chunk_analysis(rule_analysis, llm_analysis, str(chunk.get("text") or ""))
+        return merge_llm_chunk_analysis(rule_analysis, llm_analysis, str(chunk.get("text") or ""),
+                                        precomputed_action_pos=precomputed_action_pos,
+                                        precomputed_neg_pos=precomputed_neg_pos)
     except Exception as exc:  # noqa: BLE001
         rule_analysis["plannerError"] = f"Planner fallback naar lokale regels: {exc}"
         return rule_analysis
@@ -2194,16 +2363,22 @@ def first_name_position(text: str, aliases: list[str]) -> int:
     return min(positions) if positions else 10**12
 
 
-def merge_character_cards(story: str, sentences: list[str], chunk_analyses: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def merge_character_cards(story: str, sentences: list[str], chunk_analyses: list[dict[str, Any]],
+                          precomputed_action_pos: list[int] | None = None,
+                          precomputed_neg_pos: list[int] | None = None) -> list[dict[str, Any]]:
     groups: dict[str, dict[str, Any]] = {}
 
     def add_candidate(candidate: dict[str, Any], chunk_number: int | None = None) -> None:
-        name = sanitize_character_candidate_name(str(candidate.get("name") or ""), story)
+        name = sanitize_character_candidate_name(str(candidate.get("name") or ""), story,
+                                                 precomputed_action_pos=precomputed_action_pos,
+                                                 precomputed_neg_pos=precomputed_neg_pos)
         if not name:
             return
         aliases = [name]
         for alias in safe_list(candidate.get("aliases")):
-            clean_alias = sanitize_character_candidate_name(str(alias), story)
+            clean_alias = sanitize_character_candidate_name(str(alias), story,
+                                                            precomputed_action_pos=precomputed_action_pos,
+                                                            precomputed_neg_pos=precomputed_neg_pos)
             if clean_alias:
                 aliases.append(clean_alias)
         key = character_group_key(name)
@@ -2260,6 +2435,16 @@ def merge_character_cards(story: str, sentences: list[str], chunk_analyses: list
             -count_name_mentions(story, sorted(group["aliases"])),
         ),
     )
+    # Final hard filter: only real persons/characters survive to the bible and thus to portraits + cast
+    filtered_groups = []
+    for g in ordered_groups:
+        aliases = sorted(g["aliases"], key=lambda alias: (-int(g["names"].get(alias, 0)), -len(alias), alias))
+        canonical = aliases[0]
+        if canonical in {"Narrator", "Protagonist"} or is_likely_real_person(canonical, story):
+            # also require at least some evidence of personhood for non-fallbacks
+            if canonical in {"Narrator", "Protagonist"} or g.get("evidence") or count_name_mentions(story, aliases) >= 1:
+                filtered_groups.append(g)
+    ordered_groups = filtered_groups
     for index, group in enumerate(ordered_groups[:24], start=1):
         aliases = sorted(group["aliases"], key=lambda alias: (-int(group["names"].get(alias, 0)), -len(alias), alias))
         canonical = aliases[0]
@@ -2297,7 +2482,7 @@ def merge_character_cards(story: str, sentences: list[str], chunk_analyses: list
                 "visualSignature": visual_signature,
                 "continuityPrompt": (
                     f"{canonical}: consistent realistic anime character, {gender_prompt}{visual_signature}, "
-                    "same face, age, gender, outfit, hair, and body proportions whenever this character is visible"
+                    "same face, age, gender, outfit, hair, and body proportions every single time this character is visible; this exact character only"
                 ),
                 "evidence": contexts,
             }
@@ -2371,6 +2556,26 @@ def build_world_bible(chunk_analyses: list[dict[str, Any]]) -> dict[str, Any]:
 def build_story_analysis(story: str, planner_id: str, job_id: str | None = None) -> dict[str, Any]:
     engine = planner_engine(planner_id)
     chunks = story_analysis_chunks(story)
+    # Precompute action and negative-cue positions once for the entire story.
+    # This makes the context-understanding checks in is_likely_real_person (used for accurate
+    # "only real persons get portraits" filtering) dramatically faster on long stories.
+    # One O(story) pass instead of repeated full-text rescans per candidate per chunk.
+    precomputed_action_pos: list[int] = []
+    for word in PERSON_ACTION_WORDS:
+        for m in re.finditer(rf'\b{re.escape(word)}\b', story, re.IGNORECASE):
+            precomputed_action_pos.append(m.start())
+    precomputed_action_pos = sorted(set(precomputed_action_pos))
+
+    precomputed_neg_pos: list[int] = []
+    place_cues = {"town of", "city of", "village of", "in the town", "in the city", "the town", "the city",
+                  "the village", "the street", "the building", "the hotel", "the store"}
+    brand_music_cues = {"the muzak", "muzak played", "muzak in the", "background music", "elevator music",
+                        "piped music", "the system played"}
+    for cue in place_cues | brand_music_cues:
+        for m in re.finditer(re.escape(cue), story, re.IGNORECASE):
+            precomputed_neg_pos.append(m.start())
+    precomputed_neg_pos = sorted(set(precomputed_neg_pos))
+
     chunk_analyses: list[dict[str, Any]] = []
     known_names: list[str] = []
     total_chunks = len(chunks)
@@ -2383,17 +2588,39 @@ def build_story_analysis(story: str, planner_id: str, job_id: str | None = None)
                 currentChunk=index,
                 totalChunks=total_chunks,
             )
-        analysis = analyze_story_chunk(chunk, engine, known_names)
+        analysis = analyze_story_chunk(chunk, engine, known_names,
+                                       precomputed_action_pos=precomputed_action_pos,
+                                       precomputed_neg_pos=precomputed_neg_pos)
         chunk_analyses.append(analysis)
         for candidate in safe_list(analysis.get("characterCandidates")):
             if isinstance(candidate, dict):
-                name = sanitize_character_candidate_name(str(candidate.get("name") or ""), story)
+                name = sanitize_character_candidate_name(str(candidate.get("name") or ""), story,
+                                                         precomputed_action_pos=precomputed_action_pos,
+                                                         precomputed_neg_pos=precomputed_neg_pos)
                 if name and name not in known_names:
                     known_names.append(name)
 
     sentences = split_sentences(story)
-    characters = merge_character_cards(story, sentences, chunk_analyses)
     world = build_world_bible(chunk_analyses)
+
+    # Separation of concerns, but not absolute: if something looks like a location/object in the world
+    # bible but has clear person evidence (actions, dialogue), it can still be a character (e.g. a person
+    # named after a town, or a character referred to in place-like contexts). This prevents over-filtering
+    # real named persons from portraits.
+    loc_names = {canonical_element_key(l.get("name", "")) for l in world.get("locations", [])}
+    obj_names = {canonical_element_key(o.get("name", "")) for o in world.get("objects", [])}
+    forbidden_as_characters = loc_names | obj_names
+
+    characters = merge_character_cards(story, sentences, chunk_analyses,
+                                       precomputed_action_pos=precomputed_action_pos,
+                                       precomputed_neg_pos=precomputed_neg_pos)
+    characters = [
+        c for c in characters
+        if canonical_element_key(c.get("name", "")) not in forbidden_as_characters
+        or is_likely_real_person(c.get("name", ""), story,
+                                  precomputed_action_pos=precomputed_action_pos,
+                                  precomputed_neg_pos=precomputed_neg_pos)
+    ]
     notes = []
     if engine["type"] in LLM_ENGINE_TYPES:
         errors = [str(chunk.get("plannerError")) for chunk in chunk_analyses if chunk.get("plannerError")]
@@ -2442,9 +2669,12 @@ def build_panel_negative_prompt(
     absent_prompt = absent_character_visual_prompt(absent_ids, characters)
     if absent_prompt:
         parts.append(f"absent or off-screen characters must not appear: {absent_prompt}")
-    parts.append("extra people, background crowd, unwanted companion, duplicate named character")
+    parts.append("extra people, background crowd, unwanted companion, duplicate named character, stray person, unnamed figure, extra face, silhouette, background human, additional character, unlisted person")
     if present_ids is not None and not present_ids:
-        parts.append("people, person, human figure, silhouette, face, crowd")
+        parts.append("people, person, human figure, silhouette, face, crowd, any living being")
+    # Always reinforce: only the listed cast (when present_ids provided)
+    if present_ids:
+        parts.append("any human or character not explicitly listed in the positive prompt")
     return ", ".join(parts)
 
 
@@ -2462,6 +2692,8 @@ def llm_panel_visual_prompt(
         "for a text-to-image model. Describe ONLY what is literally visible in this beat. "
         "Use the story context and scene summary ONLY to resolve pronouns and ambiguity; "
         "never copy events from them into this panel. "
+        "CRITICAL CAST FIDELITY: describe ONLY characters from the allowed visible list if any; never invent, name or describe any extra people, faces, silhouettes, figures, crowds or animals. "
+        "If the visible list is empty, the scene MUST contain zero humans or animals. "
         "Never add characters, objects, places or actions that are not in this beat. "
         "No dialogue, no narration, no story explanation, no quotation marks. Return JSON only."
     )
@@ -2475,12 +2707,12 @@ def llm_panel_visual_prompt(
         context_lines += f"Scene summary (do NOT draw this, only for disambiguation): {trim_text(str(scene.get('summary')), 300)}\n"
     user_prompt = (
         f"{context_lines}"
-        f"Characters who may be visible: {cast_line}\n"
+        f"Characters who may be visible (EXACTLY these, or none): {cast_line}\n"
         f"Characters that must NOT appear: {absent_line}\n"
         f"Location: {scene.get('location')}\n"
         f"Mood: {scene.get('mood')}\n"
         f"JSON schema: {json.dumps(schema_hint, ensure_ascii=False)}\n\n"
-        f"Story beat (draw ONLY this):\n{trim_text(beat_text, 600)}"
+        f"Story beat (draw ONLY this; obey visible cast strictly):\n{trim_text(beat_text, 600)}"
     )
     result = planner_generate_json(engine, system_prompt, user_prompt, timeout)
     visual = text_field(result, ["visual", "description", "prompt"])
@@ -2512,6 +2744,18 @@ def grounded_panel_text(
         first = name.split()[0].lower() if name.split() else ""
         if first and re.search(rf"\b{re.escape(first)}\b", lowered):
             return beat_text
+    # Fidelity gate: if the grounded visual introduces any new capitalized "person-like" name not in visible cast, reject (prevents hallucinations of extra characters)
+    vis_firsts = {n.split()[0].lower() for n in visible_names if n}
+    vis_full_lower = {n.lower() for n in visible_names}
+    for m in re.finditer(r"\b[A-ZÀ-Ý][a-zÀ-ÿ'-]+(?:\s+[A-ZÀ-Ý][a-zÀ-ÿ'-]+){0,1}\b", visual):
+        cand = m.group(0).strip()
+        cand_l = cand.lower()
+        first = cand.split()[0].lower() if cand.split() else cand_l
+        if first in {"a", "the", "an", "this", "that"}:
+            continue
+        if cand_l not in vis_full_lower and first not in vis_firsts and first not in {"narrator", "protagonist"}:
+            # unknown name introduced -> unsafe, fall back
+            return beat_text
     return visual
 
 
@@ -2529,11 +2773,12 @@ def build_panel_prompt(
     style_prompt = style or "realistic anime"
     camera = SHOT_SEQUENCE[(panel_index - 1) % len(SHOT_SEQUENCE)]
     if visible_names:
-        cast_rule = f"visible cast: only {', '.join(visible_names)}"
+        cast_list = ", ".join(visible_names)
+        cast_rule = f"visible cast: only {cast_list}"
         character_detail = f"{people}, "
         human_detail = "expressive faces, natural body language, natural anatomy, correct hands, "
     else:
-        cast_rule = "empty unoccupied environment, object-focused shot"
+        cast_rule = "empty unoccupied environment, object-focused shot, zero people, zero humans, zero faces, zero silhouettes"
         character_detail = ""
         human_detail = ""
     return (
@@ -2548,17 +2793,17 @@ def build_character_reference_prompt(character: dict[str, Any], style: str) -> s
     style_prompt = style or "realistic anime"
     continuity = str(character.get("continuityPrompt") or character.get("visualSignature") or "")
     return (
-        f"{style_prompt} character reference portrait of one single person, {continuity}, "
+        f"{style_prompt} character reference portrait of ONE SINGLE PERSON ONLY, {continuity}, "
         "centered, plain neutral studio background, full figure with face clearly visible, "
         "neutral expression, consistent character design, natural anatomy, correct hands, "
-        "even soft lighting, sharp focus, detailed"
+        "even soft lighting, sharp focus, detailed, no other people, no animals, no background figures"
     )
 
 
 def build_character_reference_negative_prompt() -> str:
     return (
         f"{COMIC_NEGATIVE_PROMPT}, multiple people, two people, group, crowd, "
-        "extra characters, background characters, busy background, scenery"
+        "extra characters, background characters, busy background, scenery, other persons, faces in background"
     )
 
 
@@ -3211,14 +3456,38 @@ def extract_entries(history_item: dict[str, Any], media: str) -> list[dict[str, 
     return entries
 
 
-def wait_for_history(prompt_id: str, timeout: float = 3600) -> dict[str, Any]:
+def queue_contains_prompt(queue: dict[str, Any], prompt_id: str) -> bool:
+    for key in ("queue_running", "queue_pending"):
+        entries = queue.get(key)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, list) and len(entry) > 1 and entry[1] == prompt_id:
+                return True
+    return False
+
+
+def wait_for_history(prompt_id: str, timeout: float = COMFY_IMAGE_TIMEOUT) -> dict[str, Any]:
     deadline = time.time() + timeout
+    missing_since: float | None = None
     while time.time() < deadline:
         history = comfy_request(f"/history/{urllib.parse.quote(prompt_id)}", timeout=30)
         item = history.get(prompt_id)
         if isinstance(item, dict):
             return item
+        queue = comfy_request("/queue", timeout=10)
+        if queue_contains_prompt(queue, prompt_id):
+            missing_since = None
+        else:
+            if missing_since is None:
+                missing_since = time.time()
+            elif time.time() - missing_since >= COMFY_MISSING_HISTORY_GRACE:
+                raise RuntimeError(f"ComfyUI prompt verdween uit de queue zonder history-resultaat: {prompt_id}")
         time.sleep(2)
+    try:
+        comfy_request("/interrupt", {}, method="POST", timeout=5)
+    except Exception:
+        pass
     raise TimeoutError(f"ComfyUI job timed out: {prompt_id}")
 
 
@@ -3392,7 +3661,7 @@ def render_comic_panel(
             }
         )
         prompt_id = queue_comfy_prompt(graph, "dreamweaver-comic-zimage")
-        history = wait_for_history(prompt_id)
+        history = wait_for_history(prompt_id, timeout=COMFY_IMAGE_TIMEOUT)
         error = image.extract_error(history)
         if error:
             raise RuntimeError(json.dumps(error, ensure_ascii=False))
@@ -3417,7 +3686,7 @@ def render_comic_panel(
             }
         )
         prompt_id = queue_comfy_prompt(graph, "dreamweaver-comic-checkpoint")
-        history = wait_for_history(prompt_id)
+        history = wait_for_history(prompt_id, timeout=COMFY_IMAGE_TIMEOUT)
         error = extract_comfy_error(history)
         if error:
             raise RuntimeError(json.dumps(error, ensure_ascii=False))
@@ -3445,7 +3714,7 @@ def render_comic_panel(
             }
         )
         prompt_id = queue_comfy_prompt(graph, "dreamweaver-comic-wan")
-        history = wait_for_history(prompt_id)
+        history = wait_for_history(prompt_id, timeout=COMFY_VIDEO_TIMEOUT)
         error = wan.extract_error(history)
         if error:
             raise RuntimeError(json.dumps(error, ensure_ascii=False))
@@ -3683,7 +3952,7 @@ def run_dream_job(job_id: str, payload: dict[str, Any]) -> None:
                 )
                 prompt_id = queue_comfy_prompt(graph, "dreamweaver-video")
                 job_update(job_id, status="rendering_video", prompt_id=prompt_id)
-                history = wait_for_history(prompt_id)
+                history = wait_for_history(prompt_id, timeout=COMFY_VIDEO_TIMEOUT)
                 error = wan.extract_error(history)
                 if error:
                     raise RuntimeError(json.dumps(error, ensure_ascii=False))
@@ -3723,7 +3992,7 @@ def run_dream_job(job_id: str, payload: dict[str, Any]) -> None:
             )
             prompt_id = queue_comfy_prompt(graph, "dreamweaver-image")
             prompt_ids.append(prompt_id)
-            history = wait_for_history(prompt_id)
+            history = wait_for_history(prompt_id, timeout=COMFY_IMAGE_TIMEOUT)
             error = image.extract_error(history)
             if error:
                 raise RuntimeError(json.dumps(error, ensure_ascii=False))
