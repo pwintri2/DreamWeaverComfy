@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dreamweaver Comfy</title>
-  <link rel="stylesheet" href="styles.css?v=0.2.4">
+  <link rel="stylesheet" href="styles.css?v=0.2.9">
 </head>
 <body>
   <canvas id="backgroundCanvas" aria-hidden="true"></canvas>
@@ -54,16 +54,30 @@
             </select>
           </label>
           <label>
-            Lokaal model
+            Render-model
             <select id="localComicModelSelect">
               <option value="auto">Auto</option>
             </select>
           </label>
           <label>
-            Verhaalplanner
-            <select id="cloudModelSelect">
-              <option value="local_rules">Lokaal</option>
+            Plannerbron
+            <select id="plannerSourceSelect">
+              <option value="local" selected>Lokaal / Ollama</option>
+              <option value="api">API-model</option>
             </select>
+          </label>
+          <label class="planner-field" data-planner-kind="local">
+            Lokale planner
+            <select id="localPlannerSelect">
+              <option value="local_rules">Lokale regels</option>
+            </select>
+          </label>
+          <label class="planner-field" data-planner-kind="api">
+            API-model
+            <select id="apiPlannerSelect">
+              <option value="">API-modellen laden...</option>
+            </select>
+            <span id="apiPlannerHint" class="field-hint">Koppel een API-key via instellingen om cloudplanners te gebruiken.</span>
           </label>
           <label>
             Panel-formaat
@@ -83,8 +97,28 @@
           </label>
         </div>
 
-        <button class="primary-button" type="submit">Maak strip</button>
+        <div class="form-actions">
+          <button id="analyzeStoryBtn" class="secondary-button" type="button">Analyseer verhaal</button>
+          <button class="primary-button" type="submit">Maak strip</button>
+        </div>
       </form>
+
+      <section id="storyBriefPanel" class="story-brief hidden">
+        <div class="story-brief-header">
+          <div>
+            <p class="eyebrow">Regiebriefing</p>
+            <h2 id="storyBriefTitle">Verhaal begrepen</h2>
+          </div>
+          <span id="storyBriefMeta"></span>
+        </div>
+        <div id="storyBriefSummary" class="story-brief-summary"></div>
+        <div id="storyBriefCharacters" class="brief-section"></div>
+        <div id="storyBriefQuestions" class="brief-section"></div>
+        <label class="brief-global-notes">
+          Extra regie-notities
+          <textarea id="storyGlobalNotes" rows="3" placeholder="Bijvoorbeeld: geen achtergrondfiguren, verdriet nooit als persoon tekenen, Mira houdt in elke scene dezelfde jas."></textarea>
+        </label>
+      </section>
 
       <div id="comicJobPanel" class="status-panel comic-job-panel hidden">
         <div>
@@ -117,7 +151,10 @@
           <strong>ComfyUI</strong>
           <span id="comfyStatus">Status ophalen...</span>
         </div>
-        <button id="startComfyBtn" class="secondary-button" type="button">Start ComfyUI</button>
+        <div class="comfy-actions">
+          <button id="resetComfyBtn" class="danger-button" type="button">Reset GPU</button>
+          <button id="startComfyBtn" class="secondary-button" type="button">Start ComfyUI</button>
+        </div>
       </div>
     </section>
 
@@ -239,6 +276,6 @@
   </dialog>
 
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
-  <script type="module" src="main.js?v=0.2.4"></script>
+  <script type="module" src="main.js?v=0.2.9"></script>
 </body>
 </html>

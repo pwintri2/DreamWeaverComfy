@@ -18,12 +18,23 @@ few hallucinations as possible.
 
 ## Features
 
-- **Layered story planner** (`chunked_story_bible_v1`): long text is split into
+- **Layered story planner** (`chunked_story_bible_v2`): long text is split into
   analysis chunks → characters, locations, objects, events → canonical character
   cards → world/story bible → scenes → panels → A4 pages.
+- **Story briefing before rendering** (`story_brief_v1`): run **Analyseer verhaal**
+  first to let the planner ask clarification questions about real characters,
+  fixed appearances, metaphors, forbidden extras and object continuity. Your
+  answers are applied as user-approved canon when **Maak strip** runs.
 - **Cast continuity per panel**: each panel carries explicit `characterIds`,
   `absentCharacterIds` and `exitingCharacterIds`. Departures and empty scenes are
   detected so off-screen characters are kept out of frame.
+- **Panel continuity ledger**: each panel also stores previous-panel context,
+  current character states, focus objects and location continuity, so the planner
+  can resolve ambiguity without copying old events into the panel.
+- **4-panel A4 sets**: pages are planned in coherent sets of up to four panels.
+  Every set carries a continuity review against the previous set.
+- **Emergency GPU reset**: **Reset GPU** interrupts ComfyUI, clears the queue and
+  in-memory history, unloads models and requests VRAM cleanup.
 - **Grounded panel prompts**: with an LLM planner, every beat is distilled into a
   compact, visual-only English image prompt ("draw only what is visible"), with a
   strict fallback to the raw beat on any sign of hallucination.
@@ -31,6 +42,10 @@ few hallucinations as possible.
   recurring character renders more consistently across panels.
 - **Clean prompt separation**: all negations live in the negative prompt (diffusion
   models follow "do not" cues poorly in the positive prompt).
+- **Literal-only fallback prompts**: when no LLM planner is active, or an LLM
+  grounding pass fails, raw prose is cleaned into visible physical action before
+  it reaches ComfyUI. Dialogue, inner thoughts and figurative comparisons are kept
+  out of the positive prompt.
 - **Dialogue extraction**: quoted lines are extracted per panel and attributed to
   the nearest speaker (foundation for speech balloons).
 - **Story understanding**: a global synthesis pass plus scene context feed the
@@ -38,7 +53,7 @@ few hallucinations as possible.
 - **Editor**: edit a panel's positive/negative prompt and re-render a single panel;
   generate a reference portrait per character.
 - **Pluggable planners**: fast local rules, local **Ollama** models, or cloud
-  **OpenAI / Anthropic / Gemini** via an in-app API-keys page.
+  **OpenAI / Anthropic / Gemini / Grok** via an in-app API-keys page.
 - **Document input**: `.txt`, `.md`, `.docx`, and text-based PDF.
 
 ## Planners
@@ -47,12 +62,17 @@ few hallucinations as possible.
 | --- | --- | --- |
 | Local rules | nothing | No model, no network, no key. Fastest, least understanding. |
 | Ollama | a running Ollama with a model (e.g. `qwen2.5`) | Story text stays local. |
-| OpenAI / Anthropic / Gemini | an API key | Best understanding; text is sent to the provider. |
+| OpenAI / Anthropic / Gemini / Grok | an API key | Best understanding; text is sent to the provider. |
 
 API keys are managed in the app (gear menu → **API-keys koppelen…**) and stored
 locally in `data/secrets.json` (gitignored, `chmod 600`). Saved keys take
 precedence over environment variables. Keys are never returned in full by the API,
 and never placed in job state or logs.
+
+In the comic form, **Plannerbron** chooses whether the story planner uses
+**Lokale planner** or **API-model**. The API dropdown remains visible next to the
+local planner dropdown so Gemini, Grok and other cloud planners can be selected
+explicitly.
 
 ## Image / video models (ComfyUI)
 
@@ -97,12 +117,14 @@ npm run tauri:build    # build installer (.deb under src-tauri/target/release/bu
 1. Paste or upload a story (English).
 2. Pick a **Verhaalplanner** (planner): local rules, an Ollama model, or a cloud
    provider (couple a key first).
-3. Run **Alleen storyboard** (storyboard only) first — this plans everything
-   without using the GPU, so you can review the story bible, cast, dialogue and
+3. Click **Analyseer verhaal**, answer the briefing questions, and correct the
+   character notes before generating panels.
+4. Run **Alleen storyboard** (storyboard only) first — this plans everything
+   without using the GPU, so you can review the story bible, cast, continuity, dialogue and
    per-panel prompts.
-4. Render panels (Z-Image or Wan). ComfyUI and Ollama share VRAM, so render one at
+5. Render panels (Z-Image or Wan). ComfyUI and Ollama share VRAM, so render one at
    a time on small GPUs.
-5. In the editor, tweak prompts or regenerate individual panels.
+6. In the editor, tweak prompts or regenerate individual panels.
 
 Useful environment variables:
 
@@ -111,19 +133,24 @@ COMFYUI_URL=http://127.0.0.1:8188
 OLLAMA_URL=http://127.0.0.1:11434
 OLLAMA_PLANNER_TIMEOUT=180
 OLLAMA_PANEL_PROMPT_TIMEOUT=60
+DREAMWEAVER_LLM_SET_REVIEW_MAX_SETS=24
 OPENAI_MODEL=gpt-4o-mini
 ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 GEMINI_MODEL=gemini-2.0-flash
+GROK_MODEL=grok-4.3
+XAI_API_KEY=xai-...
 ```
 
 ## HTTP API (selected)
 
 ```text
+POST /api/comic/brief                build story briefing + questions
 POST /api/comic                      start a storyboard/comic job
 GET  /api/jobs/{id}                  job status + comic plan
 POST /api/comic/update-panel         edit a panel's prompt
 POST /api/comic/regenerate-panel     re-render a single panel
 POST /api/comic/character-reference  generate a character portrait
+POST /api/reset-comfy                interrupt queue + unload/free ComfyUI VRAM
 GET  /api/secrets                    provider status (masked keys)
 POST /api/secrets                    save/remove an API key
 GET  /api/status                     version, ComfyUI status, models, planners

@@ -1,10 +1,10 @@
-import { cancelJob, extractDocumentText, generateCharacterReference, getJob, getSecrets, getStatus, regenerateComicPanel, saveSecret, startComic, startComfy, startDream, updateComicPanel } from "./api.js?v=0.2.4";
-import { setState } from "./state.js?v=0.2.4";
-import { addDream } from "./storage.js?v=0.2.4";
-import { initBackground } from "./ui/background.js?v=0.2.4";
-import { playDream, stopDream, togglePause } from "./ui/dream-player.js?v=0.2.4";
-import { renderHistory } from "./ui/history-view.js?v=0.2.4";
-import { showToast } from "./ui/toast-view.js?v=0.2.4";
+import { cancelJob, createStoryBrief, extractDocumentText, generateCharacterReference, getJob, getSecrets, getStatus, regenerateComicPanel, resetComfy, saveSecret, startComic, startComfy, startDream, updateComicPanel } from "./api.js?v=0.2.9";
+import { setState } from "./state.js?v=0.2.9";
+import { addDream } from "./storage.js?v=0.2.9";
+import { initBackground } from "./ui/background.js?v=0.2.9";
+import { playDream, stopDream, togglePause } from "./ui/dream-player.js?v=0.2.9";
+import { renderHistory } from "./ui/history-view.js?v=0.2.9";
+import { showToast } from "./ui/toast-view.js?v=0.2.9";
 
 const views = {
   comic: document.getElementById("comicView"),
@@ -25,6 +25,7 @@ const loadingMessages = [
 let currentDream = null;
 let currentComicJobId = null;
 let comicEditJobId = null;
+let currentStoryBrief = null;
 let loadingInterval = null;
 let loadingIndex = 0;
 
@@ -83,30 +84,81 @@ async function textFromStoryFile(file) {
   return payload;
 }
 
-function setOptions(select, options, fallbackLabel) {
+function setOptions(select, options, fallbackLabel, config = {}) {
   if (!select) return;
   const previous = select.value;
   select.innerHTML = "";
   const source = options?.length ? options : [{ id: "auto", label: fallbackLabel || "Auto", supported: true }];
   let recommended = "";
+  const disableUnavailable = config.disableUnavailable !== false;
+  const annotateUnavailable = config.annotateUnavailable !== false;
   for (const item of source) {
     const option = document.createElement("option");
     option.value = item.id;
+    option.dataset.provider = item.provider || "";
+    option.dataset.configured = item.configured === false ? "false" : "true";
+    option.dataset.description = item.description || "";
     option.textContent = item.label;
     if (item.recommended) recommended = item.id;
-    if (item.supported === false || item.configured === false) {
+    const unavailable = item.supported === false || item.configured === false;
+    if (unavailable && annotateUnavailable) {
+      option.textContent = `${item.label} (${item.configured === false ? "key nodig" : "niet actief"})`;
+    }
+    if (unavailable && disableUnavailable) {
       option.disabled = true;
-      option.textContent = `${item.label} (niet actief)`;
     }
     select.appendChild(option);
   }
-  const canKeepPrevious = [...select.options].some((option) => option.value === previous && !option.disabled);
-  if (recommended && select.id === "cloudModelSelect" && !select.dataset.initialized && (!previous || previous === "local_rules")) {
+  const optionsList = [...select.options];
+  const canKeepPrevious = optionsList.some((option) => option.value === previous && !option.disabled);
+  const canUseRecommended = optionsList.some((option) => option.value === recommended && !option.disabled);
+  const firstConfigured = optionsList.find((option) => !option.disabled && option.dataset.configured !== "false");
+  const firstAvailable = optionsList.find((option) => !option.disabled);
+  if (recommended && canUseRecommended && config.preferRecommended && !select.dataset.initialized && (!previous || previous === "local_rules")) {
     select.value = recommended;
   } else if (canKeepPrevious) {
     select.value = previous;
+  } else if (config.preferFirstConfigured && firstConfigured) {
+    select.value = firstConfigured.value;
+  } else if (firstAvailable) {
+    select.value = firstAvailable.value;
   }
   select.dataset.initialized = "true";
+}
+
+function selectedPlannerId() {
+  const source = document.getElementById("plannerSourceSelect")?.value || "local";
+  const localSelect = document.getElementById("localPlannerSelect");
+  const apiSelect = document.getElementById("apiPlannerSelect");
+  if (source === "api") {
+    const selected = apiSelect?.selectedOptions?.[0];
+    if (!apiSelect?.value) {
+      throw new Error("Kies eerst een API-model voor de verhaalplanner.");
+    }
+    if (selected?.dataset.configured === "false") {
+      const label = selected.textContent.replace(/\s+\(key nodig\)$/, "");
+      throw new Error(`Koppel eerst de API-key voor ${label}.`);
+    }
+    return apiSelect.value;
+  }
+  return localSelect?.value || "local_rules";
+}
+
+function syncPlannerControls() {
+  const source = document.getElementById("plannerSourceSelect")?.value || "local";
+  const localSelect = document.getElementById("localPlannerSelect");
+  const apiSelect = document.getElementById("apiPlannerSelect");
+  const apiHint = document.getElementById("apiPlannerHint");
+  document.querySelectorAll(".planner-field").forEach((field) => {
+    field.classList.toggle("is-inactive", field.dataset.plannerKind !== source);
+  });
+  const apiOptions = [...(apiSelect?.options || [])];
+  const configuredApis = apiOptions.filter((option) => option.dataset.configured !== "false" && option.value);
+  if (apiHint) {
+    apiHint.textContent = configuredApis.length
+      ? "API-planner actief zodra Plannerbron op API-model staat."
+      : "Koppel eerst een API-key via instellingen om een API-planner te gebruiken.";
+  }
 }
 
 function updateStoryCount() {
@@ -121,7 +173,7 @@ function updateStoryCount() {
     return;
   }
   const estimatedPanels = Math.max(1, Math.round(words / 80));
-  const estimatedPages = Math.max(1, Math.ceil(estimatedPanels / 6));
+  const estimatedPages = Math.max(1, Math.ceil(estimatedPanels / 4));
   estimate.textContent = `Schatting: ongeveer ${estimatedPanels} panels op ${estimatedPages} A4-pagina's.`;
 }
 
@@ -289,6 +341,154 @@ function renderStoryBible(comic) {
   `;
 }
 
+function resetStoryBrief() {
+  currentStoryBrief = null;
+  const panel = document.getElementById("storyBriefPanel");
+  panel.classList.add("hidden");
+  document.getElementById("storyBriefSummary").innerHTML = "";
+  document.getElementById("storyBriefCharacters").innerHTML = "";
+  document.getElementById("storyBriefQuestions").innerHTML = "";
+  const notes = document.getElementById("storyGlobalNotes");
+  if (notes) notes.value = "";
+}
+
+function clearComicRuntimeUi() {
+  currentComicJobId = null;
+  comicEditJobId = null;
+  document.getElementById("comicOutput").classList.add("hidden");
+  document.getElementById("comicPages").innerHTML = "";
+  document.getElementById("storyBible").innerHTML = "";
+  document.getElementById("characterBible").innerHTML = "";
+  document.getElementById("comicJobPanel").classList.add("hidden");
+  document.getElementById("comicProgressBar").style.width = "0%";
+}
+
+function formatVramReset(result) {
+  const device = (result?.vramAfter || [])[0];
+  if (!device?.vramFree || !device?.vramTotal) return "";
+  const free = Number(device.vramFree) / (1024 ** 3);
+  const total = Number(device.vramTotal) / (1024 ** 3);
+  return ` · VRAM vrij: ${free.toFixed(1)} / ${total.toFixed(1)} GB`;
+}
+
+function renderStoryBriefPanel(brief) {
+  currentStoryBrief = brief;
+  const panel = document.getElementById("storyBriefPanel");
+  const title = document.getElementById("storyBriefTitle");
+  const meta = document.getElementById("storyBriefMeta");
+  const summary = document.getElementById("storyBriefSummary");
+  const characterTarget = document.getElementById("storyBriefCharacters");
+  const questionTarget = document.getElementById("storyBriefQuestions");
+  const characters = brief?.characters || [];
+  const questions = brief?.questions || [];
+  const world = brief?.world || {};
+  const planner = brief?.planner || {};
+  title.textContent = brief?.title || "Verhaal begrepen";
+  meta.textContent = `${Number(brief?.wordCount || 0).toLocaleString("nl-NL")} woorden · ${characters.length} personages · ${questions.length} vragen`;
+  const locations = (world.locations || []).slice(0, 8).map((item) => item.name).filter(Boolean).join(", ");
+  const objects = (world.objects || []).slice(0, 8).map((item) => item.name).filter(Boolean).join(", ");
+  summary.innerHTML = `
+    <p>${escapeHtml(brief?.globalSummary || "De planner heeft een eerste story bible gemaakt.")}</p>
+    <div class="brief-facts">
+      <span>Planner: ${escapeHtml(planner.label || planner.type || "lokaal")}</span>
+      <span>Locaties: ${escapeHtml(locations || "geen vaste locaties")}</span>
+      <span>Objecten: ${escapeHtml(objects || "geen vaste objecten")}</span>
+    </div>
+  `;
+  characterTarget.innerHTML = `
+    <h3>Personages controleren</h3>
+    <div class="brief-grid">
+      ${characters.map((character) => `
+        <article class="brief-card">
+          <strong>${escapeHtml(character.name || character.id || "Onbekend")}</strong>
+          <span>${escapeHtml(character.role || "rol onbekend")} · ${escapeHtml(character.gender || "gender onbekend")}</span>
+          <p>${escapeHtml(character.visualSignature || "Nog geen vast uiterlijk.")}</p>
+          <textarea class="brief-character-note" data-character-id="${escapeHtml(character.id || "")}" rows="3" placeholder="Vast uiterlijk, leeftijd, gender, kleding. Schrijf 'geen personage' als deze eruit moet."></textarea>
+        </article>
+      `).join("") || "<p>Geen personages gevonden. Voeg in de algemene notities toe welke cast zichtbaar mag zijn.</p>"}
+    </div>
+  `;
+  questionTarget.innerHTML = `
+    <h3>Vragen voor betere regie</h3>
+    <div class="brief-question-list">
+      ${questions.map((question) => `
+        <label class="brief-question">
+          <span>${escapeHtml(question.question || "")}</span>
+          ${question.why ? `<em>${escapeHtml(question.why)}</em>` : ""}
+          <textarea class="brief-question-answer" data-question-id="${escapeHtml(question.id || "")}" rows="2" placeholder="Jouw antwoord wordt canon voor de strip."></textarea>
+        </label>
+      `).join("") || "<p>Geen extra vragen nodig volgens de planner.</p>"}
+    </div>
+  `;
+  panel.classList.remove("hidden");
+}
+
+function collectStoryAnswers() {
+  const answers = {};
+  document.querySelectorAll(".brief-question-answer").forEach((input) => {
+    const id = input.dataset.questionId;
+    if (id && input.value.trim()) answers[id] = input.value.trim();
+  });
+  const characterNotes = {};
+  document.querySelectorAll(".brief-character-note").forEach((input) => {
+    const id = input.dataset.characterId;
+    if (id && input.value.trim()) characterNotes[id] = input.value.trim();
+  });
+  return {
+    answers,
+    characterNotes,
+    globalNotes: document.getElementById("storyGlobalNotes")?.value.trim() || "",
+  };
+}
+
+function renderPanelContinuity(panel) {
+  const continuity = panel?.continuity || {};
+  const parts = [];
+  const previous = continuity.previousPanel || {};
+  if (previous.caption) {
+    parts.push(`<p><em>Vorige panel:</em> ${escapeHtml(previous.caption)}</p>`);
+  }
+  const objects = continuity.focusObjects || [];
+  if (objects.length) {
+    parts.push(`<p><em>Focusobjecten:</em> ${objects.slice(0, 6).map(escapeHtml).join(", ")}</p>`);
+  }
+  const locations = continuity.focusLocations || [];
+  if (locations.length) {
+    parts.push(`<p><em>Locatiecontinuiteit:</em> ${locations.slice(0, 4).map(escapeHtml).join(", ")}</p>`);
+  }
+  const states = (continuity.characterStates || []).slice(0, 8).map((state) => {
+    const bits = [state.name, state.status].filter(Boolean).join(": ");
+    const location = state.location ? ` @ ${state.location}` : "";
+    const lastSeen = state.lastSeenPanel && state.status === "off-screen" ? `, laatst in panel ${state.lastSeenPanel}` : "";
+    return `${bits}${location}${lastSeen}`;
+  }).filter(Boolean);
+  if (states.length) {
+    parts.push(`<p><em>Continuity:</em> ${states.map(escapeHtml).join(" · ")}</p>`);
+  }
+  const notes = continuity.notes || [];
+  if (notes.length) {
+    parts.push(`<p><em>Notities:</em> ${notes.slice(0, 5).map(escapeHtml).join(" · ")}</p>`);
+  }
+  return parts.length ? `<div class="panel-context">${parts.join("")}</div>` : "";
+}
+
+function renderSetReview(page) {
+  const review = page?.setReview || {};
+  const notes = (review.notes || []).filter(Boolean);
+  const fixes = (review.fixes || []).filter(Boolean);
+  const summary = page?.setSummary || "";
+  if (!notes.length && !fixes.length && !summary) return "";
+  const status = review.ok === false ? "Let op" : "Continuity";
+  return `
+    <div class="set-review ${review.ok === false ? "needs-work" : "ok"}">
+      <strong>${escapeHtml(status)}</strong>
+      ${summary ? `<span>${escapeHtml(summary)}</span>` : ""}
+      ${notes.length ? `<span>${notes.slice(0, 2).map(escapeHtml).join(" · ")}</span>` : ""}
+      ${fixes.length && review.ok === false ? `<span>${fixes.slice(0, 2).map(escapeHtml).join(" · ")}</span>` : ""}
+    </div>
+  `;
+}
+
 function renderComicPlan(comic) {
   if (!comic) return;
   const output = document.getElementById("comicOutput");
@@ -300,7 +500,8 @@ function renderComicPlan(comic) {
   renderCharacterBible(comic.characters || []);
   pages.innerHTML = (comic.pages || []).map((page) => `
     <article class="comic-page ${escapeHtml(page.layout || "layout-4")}">
-      <header class="page-label">Pagina ${escapeHtml(page.pageNumber)}</header>
+      <header class="page-label">Pagina ${escapeHtml(page.pageNumber)} · Set ${escapeHtml(page.setNumber || page.pageNumber)}</header>
+      ${renderSetReview(page)}
       ${(page.panels || []).map((panel) => {
         const names = charactersForPanel(panel, comic.characters || []);
         const absentNames = charactersForPanel(panel, comic.characters || [], "absentCharacterIds");
@@ -316,6 +517,7 @@ function renderComicPlan(comic) {
               <summary>Prompt bewerken</summary>
               <p><strong>${escapeHtml(panel.shot || "shot")}</strong>${names ? ` · zichtbaar: ${escapeHtml(names)}` : " · geen personages"}</p>
               ${absentNames ? `<p>Afwezig/off-screen: ${escapeHtml(absentNames)}</p>` : ""}
+              ${renderPanelContinuity(panel)}
               ${panel.visualDescription ? `<p><em>Grounded beschrijving:</em> ${escapeHtml(panel.visualDescription)}</p>` : ""}
               <label class="panel-prompt-label">Positieve prompt</label>
               <textarea class="panel-prompt-input" data-field="prompt" data-panel-id="${escapeHtml(panel.id)}" rows="4">${escapeHtml(panel.prompt || "")}</textarea>
@@ -385,7 +587,15 @@ async function refreshStatus() {
     statusElement.style.color = status.comfyRunning ? "var(--good)" : "var(--muted)";
     document.getElementById("startComfyBtn").disabled = status.comfyRunning;
     setOptions(document.getElementById("localComicModelSelect"), status.localModels || [], "Auto");
-    setOptions(document.getElementById("cloudModelSelect"), status.cloudModels || [], "Lokaal");
+    const combinedPlanners = status.cloudModels || [];
+    const localPlanners = status.localPlannerModels || combinedPlanners.filter((item) => ["local", "ollama"].includes(item.provider));
+    const apiPlanners = status.apiPlannerModels || combinedPlanners.filter((item) => !["local", "ollama", "replicate"].includes(item.provider));
+    setOptions(document.getElementById("localPlannerSelect"), localPlanners, "Lokale regels", { preferRecommended: true });
+    setOptions(document.getElementById("apiPlannerSelect"), apiPlanners, "Geen API-modellen", {
+      disableUnavailable: false,
+      preferFirstConfigured: true,
+    });
+    syncPlannerControls();
     setState({ status });
   } catch (error) {
     statusElement.textContent = error.message;
@@ -596,8 +806,10 @@ function payloadFromComicForm() {
     story: document.getElementById("storyInput").value.trim(),
     style: document.getElementById("comicStyleSelect").value,
     localModel: document.getElementById("localComicModelSelect").value,
-    cloudModel: document.getElementById("cloudModelSelect").value,
+    cloudModel: selectedPlannerId(),
     renderMode: document.getElementById("comicRenderModeSelect").value,
+    storyBrief: currentStoryBrief,
+    storyAnswers: collectStoryAnswers(),
     width,
     height,
   };
@@ -631,9 +843,15 @@ async function handleDreamSubmit(event) {
   }
 }
 
-async function handleComicSubmit(event) {
-  event.preventDefault();
-  const payload = payloadFromComicForm();
+async function handleAnalyzeStoryClick(event) {
+  const button = event.currentTarget;
+  let payload;
+  try {
+    payload = payloadFromComicForm();
+  } catch (error) {
+    showToast(error.message, 5200);
+    return;
+  }
   const words = countWords(payload.story);
   if (words < 5) {
     showToast("Upload of plak eerst een verhaaltekst.");
@@ -642,6 +860,71 @@ async function handleComicSubmit(event) {
   if (words > 50000) {
     showToast("Deze versie accepteert maximaal 50.000 woorden per verhaal.", 5200);
     return;
+  }
+  button.disabled = true;
+  const previousLabel = button.textContent;
+  button.textContent = "Analyseren...";
+  try {
+    const { brief } = await createStoryBrief({
+      story: payload.story,
+      style: payload.style,
+      cloudModel: payload.cloudModel,
+    });
+    renderStoryBriefPanel(brief);
+    showToast(`Analyse klaar · ${(brief.characters || []).length} personages · ${(brief.questions || []).length} vragen.`);
+  } catch (error) {
+    showToast(error.message, 6200);
+  } finally {
+    button.disabled = false;
+    button.textContent = previousLabel;
+  }
+}
+
+async function handleResetComfyClick(event) {
+  const button = event.currentTarget;
+  button.disabled = true;
+  const previousLabel = button.textContent;
+  button.textContent = "Resetten...";
+  try {
+    stopDream();
+    currentDream = null;
+    clearComicRuntimeUi();
+    const result = await resetComfy({ clearHistory: true });
+    const before = result.queueBefore || {};
+    const after = result.queueAfter || {};
+    showToast(
+      `Reset klaar · queue ${Number(before.running || 0) + Number(before.pending || 0)} → ${Number(after.running || 0) + Number(after.pending || 0)}${formatVramReset(result)}`,
+      6200,
+    );
+    await refreshStatus();
+  } catch (error) {
+    showToast(error.message, 6200);
+  } finally {
+    button.disabled = false;
+    button.textContent = previousLabel;
+  }
+}
+
+async function handleComicSubmit(event) {
+  event.preventDefault();
+  let payload;
+  try {
+    payload = payloadFromComicForm();
+  } catch (error) {
+    showToast(error.message, 5200);
+    return;
+  }
+  const words = countWords(payload.story);
+  if (words < 5) {
+    showToast("Upload of plak eerst een verhaaltekst.");
+    return;
+  }
+  if (words > 50000) {
+    showToast("Deze versie accepteert maximaal 50.000 woorden per verhaal.", 5200);
+    return;
+  }
+  if (!currentStoryBrief) {
+    showToast("Tip: analyseer eerst het verhaal voor betere personage- en metafoorcontrole.", 4200);
   }
 
   document.getElementById("comicOutput").classList.add("hidden");
@@ -674,7 +957,10 @@ function bindEvents() {
   });
 
   const storyInput = document.getElementById("storyInput");
-  storyInput.addEventListener("input", updateStoryCount);
+  storyInput.addEventListener("input", () => {
+    updateStoryCount();
+    resetStoryBrief();
+  });
   document.getElementById("storyFileInput").addEventListener("change", async (event) => {
     const input = event.currentTarget;
     const file = input?.files?.[0];
@@ -684,6 +970,7 @@ function bindEvents() {
       const result = await textFromStoryFile(file);
       storyInput.value = result.text || "";
       updateStoryCount();
+      resetStoryBrief();
       const words = result.wordCount ?? countWords(result.text || "");
       showToast(`${file.name} geladen · ${Number(words || 0).toLocaleString("nl-NL")} woorden.`);
     } catch (error) {
@@ -693,6 +980,14 @@ function bindEvents() {
     }
   });
 
+  document.getElementById("comicStyleSelect").addEventListener("change", resetStoryBrief);
+  document.getElementById("plannerSourceSelect").addEventListener("change", () => {
+    syncPlannerControls();
+    resetStoryBrief();
+  });
+  document.getElementById("localPlannerSelect").addEventListener("change", resetStoryBrief);
+  document.getElementById("apiPlannerSelect").addEventListener("change", resetStoryBrief);
+  document.getElementById("analyzeStoryBtn").addEventListener("click", handleAnalyzeStoryClick);
   document.getElementById("comicForm").addEventListener("submit", handleComicSubmit);
   document.getElementById("dreamForm").addEventListener("submit", handleDreamSubmit);
   document.getElementById("comicNav").addEventListener("click", () => {
@@ -761,6 +1056,7 @@ function bindEvents() {
       showToast(error.message, 5200);
     }
   });
+  document.getElementById("resetComfyBtn").addEventListener("click", handleResetComfyClick);
 }
 
 async function replayDream(dream) {

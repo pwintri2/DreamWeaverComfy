@@ -239,11 +239,35 @@ input:focus {
 }
 
 .comic-settings {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.field-hint {
+  min-height: 30px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.planner-field.is-inactive {
+  opacity: 0.58;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.form-actions .primary-button,
+.form-actions .secondary-button {
+  min-width: 180px;
 }
 
 .primary-button,
 .secondary-button,
+.danger-button,
 .ghost-button,
 .icon-button {
   border: 0;
@@ -260,6 +284,7 @@ input:focus {
 }
 
 .secondary-button,
+.danger-button,
 .ghost-button,
 .icon-button {
   background: rgba(255, 255, 255, 0.08);
@@ -267,8 +292,18 @@ input:focus {
 }
 
 .secondary-button,
+.danger-button,
 .ghost-button {
   padding: 11px 15px;
+}
+
+.danger-button {
+  background: rgba(190, 46, 70, 0.32);
+  border-color: rgba(251, 113, 133, 0.38);
+}
+
+.danger-button:hover {
+  background: rgba(190, 46, 70, 0.48);
 }
 
 .icon-button {
@@ -278,6 +313,7 @@ input:focus {
 
 .primary-button:hover,
 .secondary-button:hover,
+.danger-button:hover,
 .ghost-button:hover,
 .icon-button:hover {
   transform: translateY(-1px);
@@ -376,6 +412,13 @@ input:focus {
   font-size: 13px;
 }
 
+.comfy-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .loading-view {
   min-height: 460px;
   display: grid;
@@ -411,6 +454,130 @@ input:focus {
   align-items: center;
   gap: 12px;
   min-width: min(430px, 100%);
+}
+
+.story-brief {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.story-brief-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 14px;
+}
+
+.story-brief-header .eyebrow {
+  margin-bottom: 6px;
+}
+
+.story-brief-header h2 {
+  font-size: clamp(24px, 3vw, 34px);
+}
+
+.story-brief-header span {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.story-brief-summary {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.story-brief-summary p {
+  margin: 0;
+}
+
+.brief-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.brief-facts span {
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.brief-section {
+  margin-top: 18px;
+}
+
+.brief-section h3 {
+  margin: 0 0 10px;
+}
+
+.brief-grid,
+.brief-question-list {
+  display: grid;
+  gap: 10px;
+}
+
+.brief-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.brief-card,
+.brief-question {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.brief-card {
+  display: grid;
+  gap: 7px;
+}
+
+.brief-card span,
+.brief-card p,
+.brief-question em {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.brief-card p {
+  margin: 0;
+}
+
+.brief-card textarea,
+.brief-question textarea,
+.brief-global-notes textarea {
+  min-height: 80px;
+  padding: 10px;
+  font-size: 13px;
+}
+
+.brief-question {
+  display: grid;
+  gap: 8px;
+}
+
+.brief-question span {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.brief-question em {
+  font-style: normal;
+}
+
+.brief-global-notes {
+  margin-top: 18px;
 }
 
 .comic-output {
@@ -576,7 +743,7 @@ input:focus {
   width: min(100%, 860px);
   aspect-ratio: 210 / 297;
   margin: 0 auto;
-  padding: 34px 18px 18px;
+  padding: 62px 18px 18px;
   border-radius: 4px;
   background: #f5f1e8;
   color: #171411;
@@ -591,6 +758,37 @@ input:focus {
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.set-review {
+  position: absolute;
+  top: 8px;
+  right: 18px;
+  display: grid;
+  gap: 2px;
+  width: min(58%, 460px);
+  max-height: 48px;
+  overflow: hidden;
+  padding: 6px 8px;
+  border: 1px solid rgba(93, 85, 74, 0.28);
+  border-radius: 6px;
+  background: rgba(255, 250, 242, 0.9);
+  color: #5d554a;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.set-review strong,
+.set-review span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.set-review.needs-work {
+  border-color: rgba(138, 46, 46, 0.55);
+  color: #7c2727;
+  background: rgba(255, 236, 232, 0.94);
 }
 
 .layout-1 {
@@ -726,6 +924,22 @@ input:focus {
 
 .panel-details p {
   margin: 7px 0 0;
+}
+
+.panel-context {
+  margin-top: 8px;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.panel-context p {
+  margin: 5px 0 0;
+}
+
+.panel-context p:first-child {
+  margin-top: 0;
 }
 
 .panel-prompt-label {
@@ -990,24 +1204,48 @@ input:focus {
     grid-template-columns: 1fr 1fr;
   }
 
-  .form-row,
-  .status-panel,
-  .comic-output-header,
-  .comic-job-panel,
-  .comic-job-actions {
-    align-items: flex-start;
-    flex-direction: column;
-  }
+	  .form-row,
+	  .status-panel,
+	  .comic-output-header,
+	  .story-brief-header,
+	  .comic-job-panel,
+	  .comic-job-actions,
+	  .comfy-actions {
+	    align-items: flex-start;
+	    flex-direction: column;
+	  }
 
-  .comic-job-actions {
-    width: 100%;
-  }
+	  .form-actions {
+	    flex-direction: column;
+	  }
 
-  .comic-page {
-    padding: 30px 10px 10px;
-    gap: 6px;
-  }
-}
+	  .form-actions .primary-button,
+	  .form-actions .secondary-button {
+	    width: 100%;
+	  }
+
+	  .comic-job-actions {
+	    width: 100%;
+	  }
+
+	  .comfy-actions {
+	    width: 100%;
+	  }
+
+	  .comfy-actions button {
+	    width: 100%;
+	  }
+
+	  .comic-page {
+	    padding: 58px 10px 10px;
+	    gap: 6px;
+	  }
+
+	  .set-review {
+	    right: 10px;
+	    width: min(54%, 360px);
+	  }
+	}
 
 @media (max-width: 520px) {
   .settings-grid,
@@ -1037,15 +1275,17 @@ input:focus {
   body::before,
   #backgroundCanvas,
   .app-header,
-  .comic-form,
-  .comic-job-panel,
-  #comfyPanel,
-  .character-bible,
-  .comic-output-header,
-  .panel-details,
-  .toast-container {
-    display: none !important;
-  }
+	  .comic-form,
+	  .comic-job-panel,
+	  #comfyPanel,
+	  .story-brief,
+	  .character-bible,
+	  .comic-output-header,
+	  .panel-details,
+	  .set-review,
+	  .toast-container {
+	    display: none !important;
+	  }
 
   main,
   .view,

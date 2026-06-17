@@ -103,7 +103,7 @@ pub fn run() {
             }
 
             if let Some(window) = app.get_webview_window("main") {
-                let url = format!("http://127.0.0.1:{port}/?v=0.2.4")
+                let url = format!("http://127.0.0.1:{port}/?v=0.2.9")
                     .parse()
                     .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
                 window.navigate(url)?;

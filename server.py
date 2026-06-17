@@ -38,7 +38,7 @@ import xml.etree.ElementTree as ET
 
 
 APP_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.2.4"
+APP_VERSION = "0.2.9"
 DEFAULT_COMFY_PATH = Path(os.environ.get("COMFYUI_PATH", "/home/pwintri2/ComfyUI"))
 DEFAULT_COMFY_URL = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188").rstrip("/")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -48,14 +48,17 @@ COMFY_IMAGE_TIMEOUT = float(os.environ.get("DREAMWEAVER_COMFY_IMAGE_TIMEOUT", "6
 COMFY_VIDEO_TIMEOUT = float(os.environ.get("DREAMWEAVER_COMFY_VIDEO_TIMEOUT", "3600"))
 COMFY_MISSING_HISTORY_GRACE = float(os.environ.get("DREAMWEAVER_COMFY_MISSING_HISTORY_GRACE", "20"))
 
-LLM_ENGINE_TYPES = {"ollama", "openai", "anthropic", "google"}
+LLM_ENGINE_TYPES = {"ollama", "openai", "anthropic", "google", "xai"}
 DEFAULT_OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 DEFAULT_ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+DEFAULT_GROK_MODEL = os.environ.get("GROK_MODEL", os.environ.get("XAI_MODEL", "grok-4.3"))
+XAI_API_BASE_URL = os.environ.get("XAI_API_BASE_URL", "https://api.x.ai/v1").rstrip("/")
 CLOUD_PLANNER_IDS = {
     "openai:env": ("openai", DEFAULT_OPENAI_MODEL),
     "anthropic:env": ("anthropic", DEFAULT_ANTHROPIC_MODEL),
     "gemini:env": ("google", DEFAULT_GEMINI_MODEL),
+    "grok:env": ("xai", DEFAULT_GROK_MODEL),
 }
 JOBS: dict[str, dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
@@ -72,6 +75,7 @@ PROVIDER_CATALOG: list[dict[str, str]] = [
     {"id": "openai", "label": "OpenAI", "envVar": "OPENAI_API_KEY", "hint": "sk-...", "docs": "https://platform.openai.com/api-keys"},
     {"id": "anthropic", "label": "Anthropic (Claude)", "envVar": "ANTHROPIC_API_KEY", "hint": "sk-ant-...", "docs": "https://console.anthropic.com/settings/keys"},
     {"id": "google", "label": "Google Gemini", "envVar": "GEMINI_API_KEY", "hint": "AIza...", "docs": "https://aistudio.google.com/app/apikey"},
+    {"id": "xai", "label": "xAI Grok", "envVar": "XAI_API_KEY", "hint": "xai-...", "docs": "https://console.x.ai/"},
     {"id": "replicate", "label": "Replicate", "envVar": "REPLICATE_API_TOKEN", "hint": "r8_...", "docs": "https://replicate.com/account/api-tokens"},
 ]
 PROVIDER_BY_ID = {provider["id"]: provider for provider in PROVIDER_CATALOG}
@@ -81,7 +85,8 @@ COMIC_ANALYSIS_CHUNK_TARGET_WORDS = 1_600
 COMIC_ANALYSIS_CHUNK_OVERLAP_SENTENCES = 2
 COMIC_SCENE_TARGET_WORDS = 230
 COMIC_PANEL_TARGET_WORDS = 80
-COMIC_MAX_PANELS_PER_PAGE = 6
+COMIC_MAX_PANELS_PER_PAGE = 4
+COMIC_LLM_SET_REVIEW_MAX_SETS = int(os.environ.get("DREAMWEAVER_LLM_SET_REVIEW_MAX_SETS", "24"))
 DOCUMENT_UPLOAD_MAX_BYTES = 35 * 1024 * 1024
 LOCAL_MODEL_EXTENSIONS = {".safetensors", ".ckpt", ".pt", ".pth", ".bin"}
 COMIC_NEGATIVE_PROMPT = (
@@ -150,10 +155,19 @@ PERSON_ACTION_WORDS = {
     "luistert", "opent", "opende", "pakt", "pakte", "rent", "rende", "roept", "riep", "staat", "stond",
     "vertrekt", "vertrok", "vraagt", "vroeg", "wacht", "wachtte", "zegt", "zei", "ziet", "zag", "zit", "zat",
     # more common actions for better character detection
-    "carried", "carries", "closed", "closes", "found", "lifted", "lifts", "read", "decided", "appeared", "warned", "kept", "studied", "discovered", "met", "talked",
-    "opened", "wrote", "learned", "realized", "chose", "picked", "took", "gave", "showed", "told",
-    "searched", "hid", "fought", "jumped", "climbed", "pushed", "pulled", "threw", "caught", "understood",
-    "knew", "believed", "hoped", "feared", "loved", "hated", "helped", "saved", "killed", "died", "lived",
+    "try", "tries", "tried", "manage", "manages", "managed",
+    "carry", "carried", "carries", "close", "closed", "closes", "find", "finds", "found", "lift", "lifted", "lifts",
+    "read", "decide", "decides", "decided", "appear", "appears", "appeared", "warn", "warns", "warned", "keep",
+    "keeps", "kept", "study", "studies", "studied", "discover", "discovers", "discovered", "meet", "meets", "met",
+    "talk", "talks", "talked", "write", "writes", "wrote", "learn", "learns", "learned", "realize", "realizes",
+    "realized", "choose", "chooses", "chose", "pick", "picks", "picked", "take", "takes", "took", "give", "gives",
+    "gave", "show", "shows", "showed", "tell", "tells", "told", "stay", "stays", "stayed",
+    "search", "searches", "searched", "hide", "hides", "hid", "fight", "fights", "fought", "jump", "jumps",
+    "jumped", "climb", "climbs", "climbed", "push", "pushes", "pushed", "pull", "pulls", "pulled", "throw",
+    "throws", "threw", "catch", "catches", "caught", "understand", "understands", "understood",
+    "know", "knows", "knew", "believe", "believes", "believed", "hope", "hopes", "hoped", "fear", "fears",
+    "feared", "love", "loves", "loved", "hate", "hates", "hated", "help", "helps", "helped", "save", "saves",
+    "saved", "kill", "kills", "killed", "die", "dies", "died", "live", "lives", "lived",
     "droeg", "draagt", "tilde", "tilt", "vond", "las", "besloot", "verscheen", "waarschuwde", "bewaarde", "bestudeerde", "ontdekte", "ontmoette", "praatte",
     "opende", "schreef", "leerde", "besefte", "koos", "pakte", "nam", "gaf", "toonde", "vertelde",
 }
@@ -789,6 +803,86 @@ def comfy_request(path: str, payload: dict[str, Any] | None = None, method: str 
     return json.loads(body.decode("utf-8") or "{}")
 
 
+def queue_counts(queue: dict[str, Any]) -> dict[str, int]:
+    return {
+        "running": len(queue.get("queue_running") or []),
+        "pending": len(queue.get("queue_pending") or []),
+    }
+
+
+def vram_summary(system_stats: dict[str, Any] | None) -> list[dict[str, Any]]:
+    result = []
+    for device in safe_list((system_stats or {}).get("devices")):
+        if not isinstance(device, dict):
+            continue
+        result.append(
+            {
+                "name": device.get("name"),
+                "type": device.get("type"),
+                "vramFree": device.get("vram_free"),
+                "vramTotal": device.get("vram_total"),
+            }
+        )
+    return result
+
+
+def cancel_open_jobs_for_reset() -> list[str]:
+    cancelled: list[str] = []
+    with JOBS_LOCK:
+        for job_id, job in JOBS.items():
+            if job.get("done"):
+                continue
+            job["cancelRequested"] = True
+            job["status"] = "reset_requested"
+            job["error"] = "Noodreset aangevraagd."
+            cancelled.append(job_id)
+    return cancelled
+
+
+def reset_comfy_runtime(clear_history: bool = True) -> dict[str, Any]:
+    cancelled_jobs = cancel_open_jobs_for_reset()
+    before_queue = comfy_request("/queue", timeout=10)
+    before_stats = None
+    try:
+        before_stats = comfy_request("/system_stats", timeout=5)
+    except Exception:
+        before_stats = None
+
+    steps: list[dict[str, Any]] = []
+
+    def run_step(name: str, path: str, payload: dict[str, Any]) -> None:
+        try:
+            comfy_request(path, payload, method="POST", timeout=10)
+            steps.append({"name": name, "ok": True})
+        except Exception as exc:  # noqa: BLE001
+            steps.append({"name": name, "ok": False, "error": str(exc)})
+
+    run_step("interrupt", "/interrupt", {})
+    run_step("clear_queue", "/queue", {"clear": True})
+    if clear_history:
+        run_step("clear_history", "/history", {"clear": True})
+    run_step("free_vram", "/free", {"unload_models": True, "free_memory": True})
+
+    time.sleep(1.0)
+    after_queue = comfy_request("/queue", timeout=10)
+    after_stats = None
+    try:
+        after_stats = comfy_request("/system_stats", timeout=5)
+    except Exception:
+        after_stats = None
+
+    return {
+        "reset": True,
+        "cancelledJobs": cancelled_jobs,
+        "steps": steps,
+        "queueBefore": queue_counts(before_queue),
+        "queueAfter": queue_counts(after_queue),
+        "vramBefore": vram_summary(before_stats),
+        "vramAfter": vram_summary(after_stats),
+        "clearHistory": clear_history,
+    }
+
+
 def user_words(text: str) -> set[str]:
     words = set()
     for word in re.findall(r"[\wÀ-ÿ']+", text.lower()):
@@ -1412,10 +1506,7 @@ def character_contexts(name: str, sentences: list[str]) -> list[str]:
 def build_character_cards(text: str, sentences: list[str]) -> list[dict[str, Any]]:
     names = extract_character_names(text)
     if not names:
-        if not story_has_human_signal(text):
-            return []
-        fallback = "Narrator" if re.search(r"\b(?:ik|i)\b", text, re.IGNORECASE) else "Protagonist"
-        names = [(fallback, 1)]
+        return []
 
     cards: list[dict[str, Any]] = []
     for index, (name, mentions) in enumerate(names, start=1):
@@ -1506,13 +1597,29 @@ def detect_location(text: str) -> str:
     )
     pronouns = {
         "he", "him", "his", "she", "her", "hers", "they", "them", "their", "us", "you", "it",
+        "my", "mine", "your", "yours", "our", "ours", "own",
         "haar", "hem", "hen", "hun", "mij", "me", "jou", "ons", "zijn", "ze", "hij",
+        "mijn", "jouw", "eigen", "onze",
+    }
+    abstract_location_words = {
+        "life", "heart", "mind", "head", "soul", "thought", "thoughts", "memory", "memories",
+        "dream", "dreams", "fear", "fears", "pain", "hope", "voice", "voices", "silence",
+        "sentence", "feeling", "feelings", "darkness", "light", "shadow", "shadows",
+        "leven", "hart", "hoofd", "ziel", "gedachte", "gedachten", "herinnering", "herinneringen",
+        "droom", "dromen", "angst", "pijn", "hoop", "stem", "stemmen", "stilte", "gevoel",
     }
     for match in pattern.finditer(text):
         candidate = trim_text(match.group(1), 56).lower()
-        first = candidate.split()[0] if candidate.split() else ""
-        if first and first not in pronouns:
-            return candidate
+        candidate = re.sub(r"^(?:my|your|his|her|our|their|own|mijn|jouw|zijn|haar|onze|hun|eigen)\s+", "", candidate).strip()
+        candidate = re.sub(r"^own\s+", "", candidate).strip()
+        candidate = re.split(r"\b(?:and|then|while|when|en|toen|terwijl)\b", candidate, maxsplit=1)[0].strip(" ,;:")
+        words = [word for word in re.findall(r"[a-zÀ-ÿ']+", candidate.lower()) if word]
+        first = words[0] if words else ""
+        if not first or first in pronouns:
+            continue
+        if any(word.strip("'") in abstract_location_words for word in words[:4]):
+            continue
+        return candidate
     lower = text.lower()
     for needle, label in [
         ("forest", "forest"), ("wood", "forest"), ("city", "city"), ("town", "town"),
@@ -2297,17 +2404,6 @@ def rule_story_chunk_analysis(chunk: dict[str, Any]) -> dict[str, Any]:
                 "source": "rules",
             }
         )
-    if not character_candidates and lower_word_set(text) & FIRST_PERSON_WORDS:
-        character_candidates.append(
-            {
-                "name": "Narrator",
-                "mentions": 1,
-                "gender": "unknown",
-                "visualClues": "",
-                "evidence": important_event_sentences(sentences, 2),
-                "source": "rules",
-            }
-        )
     return {
         "chunkNumber": int(chunk.get("chunkNumber") or 0),
         "wordCount": int(chunk.get("wordCount") or word_count(text)),
@@ -2438,6 +2534,26 @@ def gemini_generate_json(key: str, model: str, system_prompt: str, user_prompt: 
     return parse_json_object(str(text or ""))
 
 
+def xai_generate_json(key: str, model: str, system_prompt: str, user_prompt: str, timeout: float) -> dict[str, Any]:
+    body = _http_json(
+        f"{XAI_API_BASE_URL}/chat/completions",
+        {
+            "model": model or DEFAULT_GROK_MODEL,
+            "messages": [
+                {"role": "system", "content": f"{system_prompt} Return a single valid JSON object and nothing else."},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+        },
+        {"Authorization": f"Bearer {key}"},
+        timeout,
+    )
+    choices = body.get("choices") or [{}]
+    content = (choices[0].get("message") or {}).get("content") if isinstance(choices[0], dict) else ""
+    return parse_json_object(str(content or ""))
+
+
 def planner_generate_json(
     engine: dict[str, Any],
     system_prompt: str,
@@ -2448,7 +2564,7 @@ def planner_generate_json(
     model = str(engine.get("model") or "")
     if engine_type == "ollama":
         return ollama_generate_json(model, system_prompt, user_prompt, timeout)
-    if engine_type in {"openai", "anthropic", "google"}:
+    if engine_type in {"openai", "anthropic", "google", "xai"}:
         key = get_provider_key(engine_type)
         if not key:
             raise RuntimeError(f"Geen API-key gekoppeld voor {engine_type}.")
@@ -2456,6 +2572,8 @@ def planner_generate_json(
             return openai_generate_json(key, model, system_prompt, user_prompt, timeout)
         if engine_type == "anthropic":
             return anthropic_generate_json(key, model, system_prompt, user_prompt, timeout)
+        if engine_type == "xai":
+            return xai_generate_json(key, model, system_prompt, user_prompt, timeout)
         return gemini_generate_json(key, model, system_prompt, user_prompt, timeout)
     raise RuntimeError(f"Onbekende planner-provider: {engine_type}")
 
@@ -2473,7 +2591,7 @@ def llm_story_chunk_analysis(engine: dict[str, Any], chunk: dict[str, Any], know
         "summary": "short summary of this passage",
         "characters": [
             {
-                "name": "exact proper name or 'Narrator' (real persons/animals with agency; include clearly named characters even if name resembles a place; avoid pronouns, pure brands as music, obvious non-persons)",
+                "name": "exact proper name only; use 'Narrator' only for a first-person narrator who is physically visible/acting; avoid pronouns, brands, places, objects, concepts and symbolic voices/shadows",
                 "aliases": ["optional"],
                 "gender": "female|male|nonbinary|unknown",
                 "visualClues": "only if the text gives evidence",
@@ -2715,10 +2833,6 @@ def merge_character_cards(story: str, sentences: list[str], chunk_analyses: list
         for candidate in safe_list(analysis.get("characterCandidates")):
             if isinstance(candidate, dict):
                 add_candidate(candidate, chunk_number)
-
-    if not groups and story_has_human_signal(story):
-        fallback = "Narrator" if lower_word_set(story) & FIRST_PERSON_WORDS else "Protagonist"
-        add_candidate({"name": fallback, "mentions": 1, "evidence": important_event_sentences(sentences, 3)})
 
     cards: list[dict[str, Any]] = []
     ordered_groups = sorted(
@@ -3037,6 +3151,305 @@ def build_story_analysis(story: str, planner_id: str, job_id: str | None = None)
     }
 
 
+def clarification_question(question_id: str, question: str, why: str = "", kind: str = "text") -> dict[str, str]:
+    return {
+        "id": question_id,
+        "question": question,
+        "why": why,
+        "kind": kind,
+    }
+
+
+def build_rule_clarification_questions(
+    story: str,
+    characters: list[dict[str, Any]],
+    world: dict[str, Any],
+) -> list[dict[str, str]]:
+    lower = story.lower()
+    questions: list[dict[str, str]] = [
+        clarification_question(
+            "canon_characters",
+            "Welke personages zijn echte, zichtbare personages? Noem ook wie juist geen personage is.",
+            "Dit voorkomt stille extra figuren en objecten/abstracte woorden als personage.",
+        ),
+        clarification_question(
+            "visual_style_rules",
+            "Welke vaste visuele regels moeten gelden? Denk aan tijdperk, kleding, leeftijd, kleur, sfeer en realisme.",
+            "De beeldmodellen veranderen figuren sneller als het uiterlijk niet expliciet vastligt.",
+        ),
+        clarification_question(
+            "metaphors",
+            "Welke woorden of gebeurtenissen zijn figuurlijk bedoeld en mogen niet letterlijk getekend worden?",
+            "Bijvoorbeeld: stemmen, schaduwen, innerlijke pijn, herinneringen, dromen of symbolische zinnen.",
+        ),
+        clarification_question(
+            "never_show",
+            "Zijn er personages, silhouetten, dieren of achtergrondfiguren die nooit zomaar toegevoegd mogen worden?",
+            "Dit wordt als negatieve prompt en cast-regel meegenomen.",
+        ),
+    ]
+
+    uncertain = [
+        str(character.get("name") or "")
+        for character in characters
+        if normalize_gender(str(character.get("gender") or "")) == "unknown"
+    ][:6]
+    if uncertain:
+        questions.append(
+            clarification_question(
+                "character_appearance",
+                f"Kun je het vaste uiterlijk van deze personages aanvullen: {', '.join(uncertain)}?",
+                "Dit wordt aan de character bible toegevoegd.",
+            )
+        )
+
+    metaphor_cues = [
+        "shadow", "shadows", "voice", "voices", "silence", "memory", "memories", "dream", "dreams",
+        "darkness", "light", "pain", "fear", "hope", "heart", "soul", "ghost", "angel", "demon",
+    ]
+    found_cues = [cue for cue in metaphor_cues if re.search(rf"\b{re.escape(cue)}\b", lower)]
+    if found_cues:
+        questions.append(
+            clarification_question(
+                "literal_or_symbolic",
+                f"Zijn deze elementen fysiek zichtbaar of alleen figuurlijk: {', '.join(found_cues[:10])}?",
+                "Dit helpt voorkomen dat symboliek als extra personage of object verschijnt.",
+            )
+        )
+
+    objects = [str(item.get("name") or "") for item in safe_list(world.get("objects")) if item.get("name")][:8]
+    if objects:
+        questions.append(
+            clarification_question(
+                "object_continuity",
+                f"Welke objecten moeten consequent terugkomen of juist verdwijnen? Gevonden objecten: {', '.join(objects)}.",
+                "Belangrijke objecten lopen nu door in de 4-panel continuity checks.",
+            )
+        )
+
+    return questions[:8]
+
+
+def llm_clarification_questions(
+    engine: dict[str, Any],
+    story: str,
+    characters: list[dict[str, Any]],
+    world: dict[str, Any],
+    global_summary: str,
+) -> list[dict[str, str]]:
+    if engine.get("type") not in LLM_ENGINE_TYPES:
+        return []
+    character_names_for_prompt = [str(character.get("name") or "") for character in characters if character.get("name")]
+    world_digest = {
+        "characters": character_names_for_prompt[:20],
+        "locations": [item.get("name") for item in safe_list(world.get("locations"))[:12] if isinstance(item, dict)],
+        "objects": [item.get("name") for item in safe_list(world.get("objects"))[:12] if isinstance(item, dict)],
+        "relationships": safe_list(world.get("relationships"))[:12],
+    }
+    system_prompt = (
+        "You are preparing a story-to-comic planning interview. Return JSON only. "
+        "Ask short questions that help prevent wrong characters, literalized metaphors, continuity errors, and changing character designs. "
+        "Do not ask about panel count; panels are grouped automatically in sets of four."
+    )
+    schema_hint = {
+        "questions": [
+            {"id": "short_snake_case", "question": "Dutch question for the user", "why": "short Dutch reason"}
+        ]
+    }
+    user_prompt = (
+        f"Story summary: {trim_text(global_summary, 900)}\n"
+        f"Detected bible: {json.dumps(world_digest, ensure_ascii=False)}\n"
+        f"JSON schema: {json.dumps(schema_hint, ensure_ascii=False)}\n\n"
+        "Ask 4-6 useful Dutch questions. Focus on what the AI cannot safely infer."
+    )
+    try:
+        payload = planner_generate_json(engine, system_prompt, user_prompt, timeout=OLLAMA_PANEL_PROMPT_TIMEOUT)
+    except Exception:
+        return []
+    questions = []
+    for index, item in enumerate(safe_list(payload.get("questions")), start=1):
+        if not isinstance(item, dict):
+            continue
+        question = trim_text(str(item.get("question") or ""), 220)
+        if word_count(question) < 3:
+            continue
+        question_id = re.sub(r"[^a-z0-9_]+", "_", str(item.get("id") or f"llm_{index}").lower()).strip("_") or f"llm_{index}"
+        questions.append(
+            clarification_question(
+                question_id,
+                question,
+                trim_text(str(item.get("why") or ""), 180),
+            )
+        )
+    return questions[:6]
+
+
+def merge_questions(*question_lists: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[str] = set()
+    result: list[dict[str, str]] = []
+    for questions in question_lists:
+        for question in questions:
+            text = str(question.get("question") or "").strip()
+            key = re.sub(r"\W+", " ", text.lower()).strip()
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            result.append(question)
+    return result[:10]
+
+
+def build_story_brief(story: str, style: str, planner_id: str) -> dict[str, Any]:
+    story = normalize_story_text(story)
+    words = word_count(story)
+    if words < 5:
+        raise ValueError("Upload of plak eerst een verhaaltekst.")
+    if words > COMIC_WORD_LIMIT:
+        raise ValueError(f"Deze versie accepteert maximaal {COMIC_WORD_LIMIT} woorden; deze tekst heeft {words} woorden.")
+
+    analysis = build_story_analysis(story, planner_id)
+    engine = analysis.get("planner") or {"type": "local_rules"}
+    characters = list(analysis.get("characters") or [])
+    world = analysis.get("world") or {}
+    global_summary = build_global_story_summary(engine, list(analysis.get("chunks") or []))
+    rule_questions = build_rule_clarification_questions(story, characters, world)
+    llm_questions = llm_clarification_questions(engine, story, characters, world, global_summary)
+    questions = merge_questions(llm_questions, rule_questions)
+
+    return {
+        "briefId": hashlib.sha256(f"{story}|{planner_id}|{style}".encode("utf-8")).hexdigest()[:16],
+        "title": title_from_sentences(split_sentences(story), "Story briefing"),
+        "wordCount": words,
+        "style": style,
+        "planner": engine,
+        "pipeline": "story_brief_v1",
+        "globalSummary": global_summary,
+        "characters": characters,
+        "world": world,
+        "questions": questions,
+        "notes": [
+            "Beantwoord vooral wat de AI niet veilig kan raden.",
+            "Alles wat je hier invult wordt gebruikt als canon bij Maak strip.",
+        ],
+        "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def compile_user_guidance(story_brief: dict[str, Any] | None, story_answers: dict[str, Any] | None) -> str:
+    if not isinstance(story_answers, dict):
+        return ""
+    lines: list[str] = []
+    answers = story_answers.get("answers")
+    if isinstance(answers, dict):
+        question_map = {}
+        if isinstance(story_brief, dict):
+            for question in safe_list(story_brief.get("questions")):
+                if isinstance(question, dict):
+                    question_map[str(question.get("id") or "")] = str(question.get("question") or "")
+        for question_id, answer in answers.items():
+            clean = trim_text(str(answer or ""), 400)
+            if not clean:
+                continue
+            label = question_map.get(str(question_id), str(question_id))
+            lines.append(f"{label}: {clean}")
+
+    character_notes = story_answers.get("characterNotes")
+    if isinstance(character_notes, dict):
+        for character_id, note in character_notes.items():
+            clean = trim_text(str(note or ""), 300)
+            if clean and not note_says_not_a_character(clean):
+                lines.append(f"Character note {character_id}: {clean}")
+
+    global_notes = trim_text(str(story_answers.get("globalNotes") or ""), 600)
+    if global_notes:
+        lines.append(f"General user canon: {global_notes}")
+    return trim_text(" ".join(lines), 1800)
+
+
+def note_says_not_a_character(note: str) -> bool:
+    lower = note.lower()
+    return any(
+        phrase in lower
+        for phrase in [
+            "not a character", "not a person", "remove character", "geen personage",
+            "geen karakter", "niet een personage", "niet als personage",
+            "verwijder personage", "verwijder karakter", "haal uit cast",
+        ]
+    )
+
+
+def compile_negative_guidance(story_answers: dict[str, Any] | None) -> str:
+    if not isinstance(story_answers, dict):
+        return ""
+    lines: list[str] = []
+    answers = story_answers.get("answers")
+    if isinstance(answers, dict):
+        for question_id, answer in answers.items():
+            clean = trim_text(str(answer or ""), 420)
+            if not clean:
+                continue
+            qid = str(question_id or "").lower()
+            lower = clean.lower()
+            if (
+                any(key in qid for key in ("never", "forbid", "metaphor", "literal", "symbolic", "nooit", "verboden"))
+                or re.search(r"\b(no|not|never|geen|niet|nooit|zonder|figurative|figuurlijk|metaphor|metafoor)\b", lower)
+            ):
+                lines.append(clean)
+
+    character_notes = story_answers.get("characterNotes")
+    if isinstance(character_notes, dict):
+        for character_id, note in character_notes.items():
+            clean = trim_text(str(note or ""), 180)
+            if note_says_not_a_character(clean):
+                lines.append(f"{character_id} as a person or visible character")
+
+    global_notes = trim_text(str(story_answers.get("globalNotes") or ""), 420)
+    if re.search(r"\b(no|not|never|geen|niet|nooit|zonder|only|alleen)\b", global_notes.lower()):
+        lines.append(global_notes)
+    return trim_text("; ".join(lines), 1200)
+
+
+def apply_story_answers_to_characters(
+    characters: list[dict[str, Any]],
+    story_answers: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(story_answers, dict):
+        return characters
+    character_notes = story_answers.get("characterNotes")
+    if not isinstance(character_notes, dict):
+        return characters
+    result: list[dict[str, Any]] = []
+    for character in characters:
+        char_id = str(character.get("id") or "")
+        note = trim_text(str(character_notes.get(char_id) or ""), 320)
+        if note and note_says_not_a_character(note):
+            continue
+        if note:
+            updated = dict(character)
+            updated["userNotes"] = note
+            updated["visualSignature"] = trim_text(f"{character.get('visualSignature', '')}; user-approved canon: {note}", 500)
+            updated["continuityPrompt"] = trim_text(
+                f"{character.get('continuityPrompt', '')}; user-approved canon: {note}; keep this exact design consistent",
+                850,
+            )
+            result.append(updated)
+        else:
+            result.append(character)
+    return result
+
+
+def filter_relationships_for_characters(world: dict[str, Any], characters: list[dict[str, Any]]) -> None:
+    valid_ids = {str(character.get("id") or "") for character in characters}
+    relationships = [
+        relationship
+        for relationship in safe_list(world.get("relationships"))
+        if isinstance(relationship, dict)
+        and str(relationship.get("sourceId") or "") in valid_ids
+        and str(relationship.get("targetId") or "") in valid_ids
+    ]
+    world["relationships"] = relationships
+    attach_relationships_to_characters(characters, relationships)
+
+
 def character_prompt(character_ids: list[str], characters: list[dict[str, Any]]) -> str:
     by_id = {str(character["id"]): character for character in characters}
     prompts = [by_id[char_id]["continuityPrompt"] for char_id in character_ids if char_id in by_id]
@@ -3058,6 +3471,7 @@ def build_panel_negative_prompt(
     absent_ids: list[str],
     characters: list[dict[str, Any]],
     present_ids: list[str] | None = None,
+    negative_guidance: str = "",
 ) -> str:
     # Keep all negations here; diffusion models follow "do not" cues poorly in the positive prompt.
     parts = [COMIC_NEGATIVE_PROMPT]
@@ -3070,6 +3484,12 @@ def build_panel_negative_prompt(
     # Always reinforce: only the listed cast (when present_ids provided)
     if present_ids:
         parts.append("any human or character not explicitly listed in the positive prompt")
+    if negative_guidance.strip():
+        parts.append(f"user-forbidden elements and literalizations: {trim_text(negative_guidance, 420)}")
+        parts.append(
+            "literalized metaphor, personified emotion, symbolic extra figure, visualized thought as person, "
+            "visualized voice as person, unwanted silent character, extra witness, invented bystander"
+        )
     return ", ".join(parts)
 
 
@@ -3114,6 +3534,80 @@ def llm_panel_visual_prompt(
     return trim_text(visual, 420)
 
 
+FIGURATIVE_VISUAL_WORDS = {
+    "voice", "voices", "silence", "sentence", "thought", "thoughts", "memory", "memories",
+    "dream", "dreams", "heart", "mind", "soul", "life", "fear", "pain", "hope", "darkness",
+    "light", "shadow", "shadows", "feeling", "feelings",
+    "stem", "stemmen", "stilte", "zin", "gedachte", "gedachten", "herinnering", "herinneringen",
+    "droom", "dromen", "hart", "hoofd", "ziel", "leven", "angst", "pijn", "hoop", "gevoel",
+}
+
+
+def remove_dialogue_text(text: str) -> str:
+    text = re.sub(r'"[^"\n]{0,400}"', ". ", text)
+    text = re.sub(r"“[^”\n]{0,400}”", ". ", text)
+    text = re.sub(r"‘[^’\n]{0,400}’", ". ", text)
+    return text
+
+
+def has_figurative_visual_cue(text: str) -> bool:
+    lower = text.lower()
+    if any(phrase in lower for phrase in [
+        "trapped thing", "own life", "in her heart", "in his heart", "in their heart",
+        "in my heart", "in my own life", "felt like", "feels like", "as if", "as though",
+        "like a wall", "voice was", "voice is", "silence was", "silence is",
+    ]):
+        return True
+    words = set(re.findall(r"[a-zÀ-ÿ']+", lower))
+    return bool(words & FIGURATIVE_VISUAL_WORDS and re.search(r"\b(was|were|is|are|felt|feels|seemed|became|becomes|was|voelde|leek|werd|is)\b", lower))
+
+
+def strip_figurative_clause(sentence: str) -> str:
+    clean = sentence.strip()
+    for connector in [", but ", " but ", "; but ", ", as if ", " as if ", ", as though ", " as though ", ", like ", " like "]:
+        lower = clean.lower()
+        index = lower.find(connector)
+        if index > 0 and has_figurative_visual_cue(clean[index + len(connector):]):
+            clean = clean[:index].strip(" ,;:")
+    clean = re.sub(r"\b[Ii]\s+[^.?!]{0,180}\b(?:thought|wondered|realized|knew)\b[^.?!]*", " ", clean)
+    clean = re.sub(r"\b(?:he|she|they|I)\s+thought\b[^.?!]*", " ", clean, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", clean).strip(" ,;:")
+
+
+def sentence_is_inner_or_symbolic(sentence: str) -> bool:
+    lower = sentence.lower()
+    if re.match(r"^\s*(?:i|my|mijn|ik)\b", lower) and re.search(r"\b(thought|felt|knew|wondered|dacht|voelde|wist)\b", lower):
+        return True
+    if re.search(r"\b(?:thought|wondered|inner|inside her|inside him|inside me|dacht|gedachte)\b", lower):
+        return True
+    return has_figurative_visual_cue(lower) and not re.search(
+        r"\b(walk|walked|run|ran|sit|sat|stand|stood|shake|shook|cry|cried|tear|tears|open|opened|hold|held|"
+        r"pick|picked|give|gave|look|looked|turn|turned|enter|entered|leave|left|smile|smiled|"
+        r"loopt|liep|rent|rende|zit|zat|staat|stond|pakt|pakte|geeft|gaf|kijkt|keek)\b",
+        lower,
+    )
+
+
+def local_visible_beat_text(beat_text: str, scene: dict[str, Any], visible_names: list[str]) -> str:
+    text = remove_dialogue_text(beat_text)
+    cleaned_sentences: list[str] = []
+    for sentence in split_sentences(text):
+        stripped = strip_figurative_clause(sentence)
+        stripped = re.sub(r"\s+([,.!?;:])", r"\1", stripped).strip(" .,!?:;")
+        if not stripped or sentence_is_inner_or_symbolic(stripped):
+            continue
+        if word_count(stripped) < 2:
+            continue
+        cleaned_sentences.append(stripped)
+    visual = trim_text(". ".join(cleaned_sentences), 360)
+    if word_count(visual) >= 4:
+        return visual
+    location = str(scene.get("location") or "the scene")
+    if visible_names:
+        return trim_text(f"{', '.join(visible_names[:3])} in a grounded visible moment at {location}", 220)
+    return trim_text(f"empty grounded view of {location}, important objects only", 180)
+
+
 def grounded_panel_text(
     engine: dict[str, Any],
     beat_text: str,
@@ -3123,22 +3617,25 @@ def grounded_panel_text(
     story_context: str = "",
 ) -> str:
     # When the LLM planner is active, distil the raw beat into a tight, visual-only prompt.
-    # Any failure or sign of hallucination falls back to the raw beat text.
+    # Any failure or sign of hallucination falls back to a local visual-only cleanup, never the raw beat.
+    local_fallback = local_visible_beat_text(beat_text, scene, visible_names)
     if engine.get("type") not in LLM_ENGINE_TYPES:
-        return beat_text
+        return local_fallback
     try:
         visual = llm_panel_visual_prompt(
             engine, beat_text, scene, visible_names, absent_names, story_context
         )
     except Exception:  # noqa: BLE001
-        return beat_text
+        return local_fallback
     if word_count(visual) < 3:
-        return beat_text
+        return local_fallback
     lowered = visual.lower()
+    if has_figurative_visual_cue(lowered):
+        return local_fallback
     for name in absent_names:
         first = name.split()[0].lower() if name.split() else ""
         if first and re.search(rf"\b{re.escape(first)}\b", lowered):
-            return beat_text
+            return local_fallback
     # Fidelity gate: if the grounded visual introduces any new capitalized "person-like" name not in visible cast, reject (prevents hallucinations of extra characters)
     vis_firsts = {n.split()[0].lower() for n in visible_names if n}
     vis_full_lower = {n.lower() for n in visible_names}
@@ -3150,7 +3647,7 @@ def grounded_panel_text(
             continue
         if cand_l not in vis_full_lower and first not in vis_firsts and first not in {"narrator", "protagonist"}:
             # unknown name introduced -> unsafe, fall back
-            return beat_text
+            return local_fallback
     return visual
 
 
@@ -3162,6 +3659,8 @@ def build_panel_prompt(
     characters: list[dict[str, Any]],
     style: str,
     panel_index: int,
+    continuity: dict[str, Any] | None = None,
+    user_guidance: str = "",
 ) -> str:
     people = character_prompt(character_ids, characters)
     visible_names = character_names(character_ids, characters)
@@ -3176,10 +3675,17 @@ def build_panel_prompt(
         cast_rule = "empty unoccupied environment, object-focused shot, zero people, zero humans, zero faces, zero silhouettes"
         character_detail = ""
         human_detail = ""
+    focus_objects = []
+    if continuity:
+        focus_objects = [str(item) for item in safe_list(continuity.get("focusObjects")) if str(item).strip()]
+    focus_detail = f"important visible objects: {', '.join(focus_objects[:5])}, " if focus_objects else ""
+    canon_detail = ""
+    if user_guidance.strip():
+        canon_detail = "approved character designs, grounded literal staging, visible physical action only, "
     return (
         f"{style_prompt} comic panel, {camera}, {trim_text(action_text, 420)}, "
         f"location: {scene['location']}, mood: {scene['mood']}, {cast_rule}, "
-        f"{character_detail}{human_detail}coherent environment continuity, "
+        f"{focus_detail}{canon_detail}{character_detail}{human_detail}coherent environment continuity, "
         "cinematic lighting, detailed background, A4 graphic novel panel"
     )
 
@@ -3304,11 +3810,196 @@ def build_global_story_summary(engine: dict[str, Any], chunk_analyses: list[dict
         return trim_text(joined, 600)
 
 
+def world_element_mentions(text: str, elements: list[dict[str, Any]], limit: int = 8) -> list[str]:
+    lower = text.lower()
+    canonical_text = canonical_element_key(text)
+    matches: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for element in elements:
+        name = str(element.get("name") or "").strip(" .,:;!?\"'“”")
+        if not name:
+            continue
+        key = canonical_element_key(name)
+        if not key or key in seen:
+            continue
+        name_lower = name.lower()
+        hit_index = lower.find(name_lower)
+        if hit_index < 0 and key:
+            hit_index = canonical_text.find(key)
+        if hit_index < 0:
+            parts = [part for part in re.findall(r"[a-zA-ZÀ-ÿ0-9'-]+", key) if len(part) > 3]
+            part_hits = [lower.find(part.lower()) for part in parts if lower.find(part.lower()) >= 0]
+            hit_index = min(part_hits) if part_hits else -1
+        if hit_index >= 0:
+            seen.add(key)
+            matches.append((hit_index, name))
+    matches.sort(key=lambda item: item[0])
+    return [name for _, name in matches[:limit]]
+
+
+def focus_objects_for_beat(beat_text: str, world: dict[str, Any]) -> list[str]:
+    from_world = world_element_mentions(beat_text, safe_list(world.get("objects")), 10)
+    from_rules = [str(item.get("name") or "") for item in extract_object_candidates(beat_text, 8)]
+    return _unique_text([*from_world, *from_rules])[:8]
+
+
+def focus_locations_for_beat(beat_text: str, scene: dict[str, Any], world: dict[str, Any]) -> list[str]:
+    from_world = world_element_mentions(beat_text, safe_list(world.get("locations")), 6)
+    detected = detect_location(beat_text)
+    scene_location = str(scene.get("location") or "")
+    candidates = [*from_world]
+    if detected and detected != "the main setting of this scene":
+        candidates.append(detected)
+    if scene_location:
+        candidates.append(scene_location)
+    return _unique_text(candidates)[:6]
+
+
+def build_panel_continuity(
+    beat_text: str,
+    scene: dict[str, Any],
+    present_ids: list[str],
+    absent_ids: list[str],
+    exiting_ids: list[str],
+    characters: list[dict[str, Any]],
+    world: dict[str, Any],
+    previous_panel: dict[str, Any] | None,
+    character_states: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    by_id = {str(character.get("id") or ""): character for character in characters}
+    focus_objects = focus_objects_for_beat(beat_text, world)
+    focus_locations = focus_locations_for_beat(beat_text, scene, world)
+    scene_location = str(scene.get("location") or "").strip()
+    notes: list[str] = []
+    if previous_panel:
+        notes.append(f"Follows panel {previous_panel.get('panelNumber')}: {trim_text(str(previous_panel.get('caption') or ''), 120)}")
+    if not present_ids and scene_has_empty_cue(beat_text):
+        notes.append("This panel is explicitly empty: keep all people off-screen.")
+    visible_exiting_ids = [char_id for char_id in exiting_ids if char_id in present_ids]
+    offscreen_exiting_ids = [char_id for char_id in exiting_ids if char_id not in present_ids]
+    if visible_exiting_ids:
+        notes.append("Leaving now: " + ", ".join(character_names(visible_exiting_ids, characters, 5)))
+    if offscreen_exiting_ids:
+        notes.append("Recently left / keep off-screen: " + ", ".join(character_names(offscreen_exiting_ids, characters, 5)))
+    if focus_objects:
+        notes.append("Important object continuity: " + ", ".join(focus_objects[:5]))
+
+    relevant_ids = ordered_unique([*present_ids, *exiting_ids, *[char_id for char_id in absent_ids if character_states.get(char_id)]])
+    state_rows: list[dict[str, Any]] = []
+    for char_id in relevant_ids[:12]:
+        character = by_id.get(char_id)
+        if not character:
+            continue
+        previous_state = character_states.get(char_id, {})
+        if char_id in present_ids:
+            status = "exiting after this panel" if char_id in exiting_ids else "visible"
+            location = scene_location
+        elif char_id in exiting_ids:
+            status = "recently left / off-screen"
+            location = str(previous_state.get("location") or scene_location)
+        else:
+            status = "off-screen"
+            location = str(previous_state.get("location") or "")
+        row = {
+            "id": char_id,
+            "name": str(character.get("name") or ""),
+            "status": status,
+            "location": location,
+            "lastSeenPanel": previous_state.get("lastSeenPanel"),
+            "lastAction": str(previous_state.get("lastAction") or ""),
+        }
+        state_rows.append(row)
+
+    previous = None
+    if previous_panel:
+        previous = {
+            "panelNumber": previous_panel.get("panelNumber"),
+            "caption": trim_text(str(previous_panel.get("caption") or ""), 160),
+            "visibleCast": character_names(list(previous_panel.get("characterIds") or []), characters, 8),
+        }
+
+    return {
+        "previousPanel": previous,
+        "sceneLocation": scene_location,
+        "focusObjects": focus_objects,
+        "focusLocations": focus_locations,
+        "characterStates": state_rows,
+        "notes": _unique_text(notes)[:8],
+    }
+
+
+def update_character_states_after_panel(
+    character_states: dict[str, dict[str, Any]],
+    panel: dict[str, Any],
+    scene: dict[str, Any],
+    characters: list[dict[str, Any]],
+) -> None:
+    by_id = {str(character.get("id") or ""): character for character in characters}
+    scene_location = str(scene.get("location") or "").strip()
+    caption = trim_text(str(panel.get("caption") or ""), 140)
+    for char_id in list(panel.get("characterIds") or []):
+        if char_id not in by_id:
+            continue
+        character_states[char_id] = {
+            "status": "visible",
+            "location": scene_location,
+            "lastSeenPanel": panel.get("panelNumber"),
+            "lastAction": caption,
+        }
+    for char_id in list(panel.get("exitingCharacterIds") or []):
+        if char_id not in by_id:
+            continue
+        previous = character_states.get(char_id, {})
+        character_states[char_id] = {
+            **previous,
+            "status": "exited",
+            "location": f"off-screen after {scene_location}" if scene_location else "off-screen",
+            "lastSeenPanel": panel.get("panelNumber"),
+            "lastAction": caption,
+        }
+
+
+def continuity_context_text(continuity: dict[str, Any]) -> str:
+    parts: list[str] = []
+    previous = continuity.get("previousPanel")
+    if isinstance(previous, dict) and previous.get("caption"):
+        parts.append(f"Previous panel: {previous.get('caption')}")
+    focus_objects = [str(item) for item in safe_list(continuity.get("focusObjects")) if str(item).strip()]
+    if focus_objects:
+        parts.append("Focus objects: " + ", ".join(focus_objects[:6]))
+    focus_locations = [str(item) for item in safe_list(continuity.get("focusLocations")) if str(item).strip()]
+    if focus_locations:
+        parts.append("Location continuity: " + ", ".join(focus_locations[:4]))
+    state_lines = []
+    for row in safe_list(continuity.get("characterStates"))[:8]:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "")
+        status = str(row.get("status") or "")
+        location = str(row.get("location") or "")
+        last_seen = row.get("lastSeenPanel")
+        if not name or not status:
+            continue
+        detail = f"{name} is {status}"
+        if location:
+            detail += f" at {location}"
+        if last_seen and status == "off-screen":
+            detail += f", last seen in panel {last_seen}"
+        state_lines.append(detail)
+    if state_lines:
+        parts.append("Character state: " + "; ".join(state_lines))
+    notes = [str(item) for item in safe_list(continuity.get("notes")) if str(item).strip()]
+    if notes:
+        parts.append("Continuity notes: " + "; ".join(notes[:5]))
+    return trim_text(" ".join(parts), 900)
+
+
 def panel_story_context(
     global_summary: str,
     world: dict[str, Any],
     present_ids: list[str],
     absent_ids: list[str],
+    continuity: dict[str, Any] | None = None,
 ) -> str:
     parts = [global_summary.strip()] if global_summary.strip() else []
     relevant_ids = set(present_ids) | set(absent_ids)
@@ -3327,10 +4018,214 @@ def panel_story_context(
             relationship_lines.append(f"{target} is {source}'s {relation}")
     if relationship_lines:
         parts.append("Relationships: " + "; ".join(_unique_text(relationship_lines)[:6]))
-    return trim_text(" ".join(parts), 800)
+    if continuity:
+        context = continuity_context_text(continuity)
+        if context:
+            parts.append(context)
+    return trim_text(" ".join(parts), 1200)
 
 
-def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None = None) -> dict[str, Any]:
+def panel_set_caption_text(panel_set: dict[str, Any]) -> str:
+    return " ".join(str(panel.get("caption") or "") for panel in safe_list(panel_set.get("panels")))
+
+
+def panel_set_digest(panel_set: dict[str, Any], characters: list[dict[str, Any]]) -> dict[str, Any]:
+    panels = [panel for panel in safe_list(panel_set.get("panels")) if isinstance(panel, dict)]
+    return {
+        "setNumber": panel_set.get("setNumber"),
+        "panelIds": [panel.get("id") for panel in panels],
+        "captions": [trim_text(str(panel.get("caption") or ""), 160) for panel in panels],
+        "visibleCharacters": character_names(list(panel_set.get("visibleCharacterIds") or []), characters, 12),
+        "exitingCharacters": character_names(list(panel_set.get("exitingCharacterIds") or []), characters, 12),
+        "focusObjects": safe_list(panel_set.get("focusObjects"))[:10],
+        "summary": panel_set.get("summary"),
+    }
+
+
+def has_return_cue(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b("
+            r"return|returns|returned|reappear|reappears|reappeared|back|came back|comes back|"
+            r"enter|enters|entered|arrive|arrives|arrived|appear|appears|appeared|"
+            r"keert terug|komt terug|kwam terug|verschijnt|verscheen|arriveert|arriveerde|"
+            r"binnenkomt|binnenkwam|terug"
+            r")\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def local_panel_set_review(
+    previous_set: dict[str, Any] | None,
+    current_set: dict[str, Any],
+    characters: list[dict[str, Any]],
+) -> dict[str, Any]:
+    notes: list[str] = []
+    fixes: list[str] = []
+    ok = True
+    if not previous_set:
+        notes.append("Eerste set: gebruikt als visuele en verhaalmatige basis voor de volgende set.")
+    else:
+        notes.append(
+            f"Set {current_set.get('setNumber')} is gecontroleerd tegen set {previous_set.get('setNumber')}."
+        )
+        current_text = panel_set_caption_text(current_set)
+        previous_exiting = set(str(char_id) for char_id in safe_list(previous_set.get("exitingCharacterIds")))
+        current_visible = set(str(char_id) for char_id in safe_list(current_set.get("visibleCharacterIds")))
+        unexpected_returns = sorted(previous_exiting & current_visible)
+        if unexpected_returns and not has_return_cue(current_text):
+            ok = False
+            names = character_names(unexpected_returns, characters, 8)
+            fixes.append(
+                f"Controleer terugkeer van {names}: vorige set liet deze cast vertrekken, maar deze set toont ze zonder duidelijke terugkeer."
+            )
+        previous_objects = set(str(item).lower() for item in safe_list(previous_set.get("focusObjects")) if str(item).strip())
+        current_objects = set(str(item).lower() for item in safe_list(current_set.get("focusObjects")) if str(item).strip())
+        carried_objects = sorted(previous_objects & current_objects)
+        if carried_objects:
+            notes.append("Objectcontinuiteit: " + ", ".join(carried_objects[:5]))
+
+    if not fixes:
+        fixes.append("Geen automatische correcties nodig; gebruik de panelprompts om details handmatig aan te scherpen.")
+    return {
+        "ok": ok,
+        "method": "local_continuity_rules",
+        "notes": notes[:5],
+        "fixes": fixes[:5],
+    }
+
+
+def llm_panel_set_review(
+    engine: dict[str, Any],
+    previous_set: dict[str, Any] | None,
+    current_set: dict[str, Any],
+    characters: list[dict[str, Any]],
+    user_guidance: str,
+) -> dict[str, Any] | None:
+    if engine.get("type") not in LLM_ENGINE_TYPES or not previous_set:
+        return None
+    system_prompt = (
+        "You are a comic continuity supervisor. Return JSON only. "
+        "Compare the current 4-panel set with the previous set. "
+        "Check cast continuity, character exits/returns, object continuity, literalized metaphors, and invented silent characters. "
+        "Do not rewrite the story; only report issues and concise fixes."
+    )
+    schema_hint = {"ok": True, "notes": ["Dutch note"], "fixes": ["Dutch fix"]}
+    user_prompt = (
+        f"User-approved canon and metaphor rules: {trim_text(user_guidance, 900) or 'none'}\n"
+        f"Previous set: {json.dumps(panel_set_digest(previous_set, characters), ensure_ascii=False)}\n"
+        f"Current set: {json.dumps(panel_set_digest(current_set, characters), ensure_ascii=False)}\n"
+        f"JSON schema: {json.dumps(schema_hint, ensure_ascii=False)}"
+    )
+    try:
+        payload = planner_generate_json(engine, system_prompt, user_prompt, timeout=OLLAMA_PANEL_PROMPT_TIMEOUT)
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw_ok = payload.get("ok", True)
+    if isinstance(raw_ok, str):
+        ok = raw_ok.strip().lower() not in {"false", "nee", "no", "0", "niet ok"}
+    else:
+        ok = bool(raw_ok)
+    notes = [trim_text(str(item), 220) for item in safe_list(payload.get("notes")) if str(item).strip()]
+    fixes = [trim_text(str(item), 220) for item in safe_list(payload.get("fixes")) if str(item).strip()]
+    if not notes and not fixes:
+        return None
+    return {
+        "ok": ok,
+        "method": f"{engine.get('type')}_continuity_review",
+        "notes": notes[:5],
+        "fixes": fixes[:5] or ["Geen concrete fixes teruggegeven."],
+    }
+
+
+def build_panel_set_reviews(
+    panels: list[dict[str, Any]],
+    characters: list[dict[str, Any]],
+    world: dict[str, Any],
+    engine: dict[str, Any],
+    user_guidance: str = "",
+) -> list[dict[str, Any]]:
+    panel_sets: list[dict[str, Any]] = []
+    previous_set: dict[str, Any] | None = None
+    for set_index, start in enumerate(range(0, len(panels), COMIC_MAX_PANELS_PER_PAGE), start=1):
+        set_panels = panels[start:start + COMIC_MAX_PANELS_PER_PAGE]
+        for slot, panel in enumerate(set_panels, start=1):
+            panel["setNumber"] = set_index
+            panel["setSlot"] = slot
+        visible_ids = ordered_unique(
+            [str(char_id) for panel in set_panels for char_id in safe_list(panel.get("characterIds"))]
+        )
+        absent_ids = ordered_unique(
+            [str(char_id) for panel in set_panels for char_id in safe_list(panel.get("absentCharacterIds"))]
+        )
+        exiting_ids = ordered_unique(
+            [str(char_id) for panel in set_panels for char_id in safe_list(panel.get("exitingCharacterIds"))]
+        )
+        focus_objects = _unique_text(
+            [
+                str(item)
+                for panel in set_panels
+                for item in safe_list((panel.get("continuity") or {}).get("focusObjects"))
+                if str(item).strip()
+            ]
+        )[:10]
+        focus_locations = _unique_text(
+            [
+                str(item)
+                for panel in set_panels
+                for item in safe_list((panel.get("continuity") or {}).get("focusLocations"))
+                if str(item).strip()
+            ]
+        )[:8]
+        summary = trim_text(" ".join(str(panel.get("caption") or "") for panel in set_panels), 420)
+        panel_set = {
+            "setNumber": set_index,
+            "panelIds": [panel.get("id") for panel in set_panels],
+            "panels": set_panels,
+            "summary": summary,
+            "visibleCharacterIds": visible_ids,
+            "visibleCharacters": character_names(visible_ids, characters, 12),
+            "absentCharacterIds": absent_ids,
+            "exitingCharacterIds": exiting_ids,
+            "focusObjects": focus_objects,
+            "focusLocations": focus_locations,
+        }
+        review = local_panel_set_review(previous_set, panel_set, characters)
+        if set_index <= COMIC_LLM_SET_REVIEW_MAX_SETS:
+            llm_review = llm_panel_set_review(engine, previous_set, panel_set, characters, user_guidance)
+            if llm_review:
+                review = llm_review
+        panel_set["review"] = review
+        for panel in set_panels:
+            panel["setReview"] = {
+                "ok": review.get("ok", True),
+                "method": review.get("method"),
+                "notes": safe_list(review.get("notes"))[:3],
+                "fixes": safe_list(review.get("fixes"))[:3],
+            }
+        panel_sets.append(panel_set)
+        previous_set = panel_set
+
+    # Keep returned set payload compact; pages/panels already carry the full panel objects.
+    compact_sets = []
+    for panel_set in panel_sets:
+        compact = {key: value for key, value in panel_set.items() if key != "panels"}
+        compact_sets.append(compact)
+    return compact_sets
+
+
+def build_comic_plan(
+    story: str,
+    style: str,
+    planner_id: str,
+    job_id: str | None = None,
+    story_brief: dict[str, Any] | None = None,
+    story_answers: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     story = normalize_story_text(story)
     words = word_count(story)
     if words < 5:
@@ -3342,14 +4237,28 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
         job_update(job_id, status="analyzing_story", analysisStage="chunking")
     sentences = split_sentences(story)
     analysis = build_story_analysis(story, planner_id, job_id)
-    characters = list(analysis.get("characters") or [])
+    story_brief = story_brief if isinstance(story_brief, dict) else {}
+    story_answers = story_answers if isinstance(story_answers, dict) else {}
+    user_guidance = compile_user_guidance(story_brief, story_answers)
+    negative_guidance = compile_negative_guidance(story_answers)
+    characters = apply_story_answers_to_characters(list(analysis.get("characters") or []), story_answers)
     engine = analysis.get("planner") or {"type": "local_rules"}
     world = analysis.get("world") or {}
+    filter_relationships_for_characters(world, characters)
+    if user_guidance:
+        world["userGuidance"] = user_guidance
     if job_id and engine.get("type") == "ollama":
         job_update(job_id, status="analyzing_story", analysisStage="synthesis")
     global_summary = build_global_story_summary(engine, list(analysis.get("chunks") or []))
+    if user_guidance:
+        global_summary = trim_text(
+            f"{global_summary} User-approved canon and metaphor rules: {user_guidance}",
+            1400,
+        )
     chunks = scene_chunks(story)
     notes = list(analysis.get("notes") or [])
+    if user_guidance:
+        notes.append("Gebruikersbriefing toegepast op cast, metaforen en continuity prompts.")
 
     scenes: list[dict[str, Any]] = []
     panels: list[dict[str, Any]] = []
@@ -3357,6 +4266,8 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
     scene_texts = [" ".join(scene_sentences) for scene_sentences in chunks]
     scene_cast_plan = timeline_casts_for_scenes(scene_texts, characters)
     all_character_ids = [str(character["id"]) for character in characters]
+    character_states: dict[str, dict[str, Any]] = {}
+    previous_panel: dict[str, Any] | None = None
     for scene_index, scene_sentences in enumerate(chunks, start=1):
         scene_text = " ".join(scene_sentences)
         scene_cast = scene_cast_plan[scene_index - 1] if scene_index - 1 < len(scene_cast_plan) else {"present": [], "absent": [], "exiting": []}
@@ -3387,7 +4298,18 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
             absent_names = character_names(absent, characters, 8)
             if job_id and engine.get("type") == "ollama":
                 job_update(job_id, status="writing_panel_prompts", analysisStage="panel_prompts", currentPanel=panel_number)
-            story_context = panel_story_context(global_summary, world, present, absent)
+            continuity = build_panel_continuity(
+                beat_text,
+                scene,
+                present,
+                absent,
+                exiting,
+                characters,
+                world,
+                previous_panel,
+                character_states,
+            )
+            story_context = panel_story_context(global_summary, world, present, absent, continuity)
             action_text = grounded_panel_text(engine, beat_text, scene, visible_names, absent_names, story_context)
             panel = {
                 "id": f"panel_{panel_number:04d}",
@@ -3397,21 +4319,35 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
                 "caption": trim_text(beat_text, 190),
                 "visualDescription": action_text if action_text != beat_text else "",
                 "dialogue": extract_dialogue(beat_text, characters),
+                "continuity": continuity,
                 "shot": SHOT_SEQUENCE[(panel_number - 1) % len(SHOT_SEQUENCE)],
                 "characterIds": present,
                 "absentCharacterIds": absent,
                 "exitingCharacterIds": exiting,
                 "status": "planned",
-                "prompt": build_panel_prompt(action_text, scene, present, absent, characters, style, panel_number),
-                "negativePrompt": build_panel_negative_prompt(absent, characters, present),
+                "prompt": build_panel_prompt(
+                    action_text,
+                    scene,
+                    present,
+                    absent,
+                    characters,
+                    style,
+                    panel_number,
+                    continuity,
+                    user_guidance,
+                ),
+                "negativePrompt": build_panel_negative_prompt(absent, characters, present, negative_guidance),
             }
             panels.append(panel)
             scene_panel_ids.append(panel["id"])
+            update_character_states_after_panel(character_states, panel, scene, characters)
+            previous_panel = panel
             panel_number += 1
         scene["panelIds"] = scene_panel_ids
         scenes.append(scene)
 
-    pages = paginate_comic_panels(panels)
+    panel_sets = build_panel_set_reviews(panels, characters, world, engine, user_guidance)
+    pages = paginate_comic_panels(panels, panel_sets)
     title = title_from_sentences(sentences, "Nieuw stripverhaal")
     return {
         "title": title,
@@ -3421,41 +4357,53 @@ def build_comic_plan(story: str, style: str, planner_id: str, job_id: str | None
             "pipeline": analysis.get("pipeline"),
             "planner": analysis.get("planner"),
             "chunkCount": analysis.get("chunkCount"),
-            "world": analysis.get("world"),
-            "notes": analysis.get("notes"),
+            "world": world,
+            "notes": notes,
             "globalSummary": global_summary,
+            "userGuidance": user_guidance,
         },
         "wordCount": words,
         "sceneCount": len(scenes),
         "panelCount": len(panels),
         "pageCount": len(pages),
         "characters": characters,
-        "world": analysis.get("world"),
+        "world": world,
         "scenes": scenes,
         "panels": panels,
+        "panelSets": panel_sets,
         "pages": pages,
         "notes": notes,
         "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
-def paginate_comic_panels(panels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def paginate_comic_panels(
+    panels: list[dict[str, Any]],
+    panel_sets: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     pages: list[dict[str, Any]] = []
+    set_map = {
+        int(panel_set.get("setNumber")): panel_set
+        for panel_set in safe_list(panel_sets)
+        if isinstance(panel_set, dict) and str(panel_set.get("setNumber") or "").isdigit()
+    }
     index = 0
     page_number = 1
     while index < len(panels):
         remaining = len(panels) - index
         take = min(COMIC_MAX_PANELS_PER_PAGE, remaining)
-        if remaining > COMIC_MAX_PANELS_PER_PAGE and remaining - take == 1:
-            take -= 1
         page_panels = panels[index : index + take]
         for slot, panel in enumerate(page_panels, start=1):
             panel["pageNumber"] = page_number
             panel["slot"] = slot
+        page_set = set_map.get(page_number) or {}
         pages.append(
             {
                 "pageNumber": page_number,
+                "setNumber": page_set.get("setNumber", page_number),
                 "layout": f"layout-{len(page_panels)}",
+                "setSummary": page_set.get("summary", ""),
+                "setReview": page_set.get("review", {}),
                 "panels": page_panels,
             }
         )
@@ -3542,9 +4490,17 @@ def provider_status() -> list[dict[str, Any]]:
     return result
 
 
-def cloud_model_choices() -> list[dict[str, Any]]:
+def local_planner_choices() -> list[dict[str, Any]]:
     ollama_models = available_ollama_models()
-    choices: list[dict[str, Any]] = []
+    choices: list[dict[str, Any]] = [
+        {
+            "id": "local_rules",
+            "label": "Lokale regels",
+            "provider": "local",
+            "configured": True,
+            "description": "Geen model, internet of API-key nodig.",
+        }
+    ]
     preferred = ["qwen2.5:latest", "mistral:latest", "llama3:latest", "llama3:8b"]
     for model in preferred:
         if model not in ollama_models:
@@ -3578,48 +4534,44 @@ def cloud_model_choices() -> list[dict[str, Any]]:
                 "description": "Lokale chunkplanner via Ollama; verhaaltekst blijft lokaal.",
             }
         )
-    choices.append(
-        {
-            "id": "local_rules",
-            "label": "Lokaal: snelle regelplanner",
-            "provider": "local",
-            "configured": True,
-            "description": "Geen model, internet of API-key nodig.",
-        }
-    )
-    choices.extend(
-        [
-            {
-                "id": "openai:env",
-                "label": f"OpenAI API ({os.environ.get('OPENAI_MODEL', 'OPENAI_MODEL env')})",
-                "provider": "openai",
-                "configured": bool(get_provider_key("openai")),
-                "description": "Cloudplanner-adapter; API-key via de API-keys pagina of env.",
-            },
-            {
-                "id": "anthropic:env",
-                "label": f"Anthropic API ({os.environ.get('ANTHROPIC_MODEL', 'ANTHROPIC_MODEL env')})",
-                "provider": "anthropic",
-                "configured": bool(get_provider_key("anthropic")),
-                "description": "Cloudplanner-adapter; API-key via de API-keys pagina of env.",
-            },
-            {
-                "id": "gemini:env",
-                "label": f"Gemini API ({os.environ.get('GEMINI_MODEL', 'GEMINI_MODEL env')})",
-                "provider": "google",
-                "configured": bool(get_provider_key("google")),
-                "description": "Cloudplanner-adapter; API-key via de API-keys pagina of env.",
-            },
-            {
-                "id": "replicate:env",
-                "label": "Replicate API (REPLICATE_API_TOKEN)",
-                "provider": "replicate",
-                "configured": bool(get_provider_key("replicate")),
-                "description": "Voor toekomstige cloud image/video adapters.",
-            },
-        ]
-    )
     return choices
+
+
+def api_planner_choices() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "openai:env",
+            "label": f"OpenAI API ({DEFAULT_OPENAI_MODEL})",
+            "provider": "openai",
+            "configured": bool(get_provider_key("openai")),
+            "description": "Cloudplanner-adapter; API-key via de API-keys pagina of env.",
+        },
+        {
+            "id": "anthropic:env",
+            "label": f"Anthropic API ({DEFAULT_ANTHROPIC_MODEL})",
+            "provider": "anthropic",
+            "configured": bool(get_provider_key("anthropic")),
+            "description": "Cloudplanner-adapter; API-key via de API-keys pagina of env.",
+        },
+        {
+            "id": "gemini:env",
+            "label": f"Gemini API ({DEFAULT_GEMINI_MODEL})",
+            "provider": "google",
+            "configured": bool(get_provider_key("google")),
+            "description": "Cloudplanner-adapter; API-key via de API-keys pagina of env.",
+        },
+        {
+            "id": "grok:env",
+            "label": f"Grok API ({DEFAULT_GROK_MODEL})",
+            "provider": "xai",
+            "configured": bool(get_provider_key("xai")),
+            "description": "Cloudplanner-adapter via xAI; API-key via de API-keys pagina of env.",
+        },
+    ]
+
+
+def cloud_model_choices() -> list[dict[str, Any]]:
+    return local_planner_choices() + api_planner_choices()
 
 
 def local_model_choices(inventory: dict[str, Any]) -> list[dict[str, Any]]:
@@ -4160,8 +5112,10 @@ def run_comic_job(job_id: str, payload: dict[str, Any]) -> None:
         style = str(payload.get("style") or "realistic anime").strip() or "realistic anime"
         planner_id = str(payload.get("cloudModel") or "local_rules")
         render_mode = str(payload.get("renderMode") or "render")
+        story_brief = payload.get("storyBrief") if isinstance(payload.get("storyBrief"), dict) else {}
+        story_answers = payload.get("storyAnswers") if isinstance(payload.get("storyAnswers"), dict) else {}
         job_update(job_id, status="analyzing")
-        comic = build_comic_plan(story, style, planner_id, job_id)
+        comic = build_comic_plan(story, style, planner_id, job_id, story_brief, story_answers)
         inventory = scan_models(comfy_path)
         seed = bounded_int(payload.get("seed"), random.randint(1, 2**32 - 1), 1, 2**63 - 1)
         model_choice = select_comic_model(str(payload.get("localModel") or "auto"), inventory)
@@ -4493,6 +5447,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(
                     {
                         "localModels": local_model_choices(inventory),
+                        "localPlannerModels": local_planner_choices(),
+                        "apiPlannerModels": api_planner_choices(),
                         "cloudModels": cloud_model_choices(),
                         "inventory": inventory,
                     }
@@ -4551,6 +5507,12 @@ class Handler(BaseHTTPRequestHandler):
                 thread = threading.Thread(target=run_dream_job, args=(job_id, data), daemon=True)
                 thread.start()
                 self.send_json({"jobId": job_id})
+            elif parsed.path == "/api/comic/brief":
+                data = self.read_json()
+                story = str(data.get("story") or "")
+                style = str(data.get("style") or "realistic anime").strip() or "realistic anime"
+                planner_id = str(data.get("cloudModel") or "local_rules")
+                self.send_json({"brief": build_story_brief(story, style, planner_id)})
             elif parsed.path == "/api/comic":
                 data = self.read_json()
                 job_id = f"comic-{int(time.time())}-{uuid.uuid4().hex[:8]}"
@@ -4622,6 +5584,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 job_update(job_id, cancelRequested=True)
                 self.send_json({"cancelRequested": True, "jobId": job_id})
+            elif parsed.path == "/api/reset-comfy":
+                data = self.read_json()
+                clear_history = bool(data.get("clearHistory", True))
+                self.send_json(reset_comfy_runtime(clear_history=clear_history))
             elif parsed.path == "/api/start-comfy":
                 data = self.read_json()
                 comfy_path = Path(data.get("comfyPath") or DEFAULT_COMFY_PATH)
@@ -4655,6 +5621,8 @@ class Handler(BaseHTTPRequestHandler):
                 "helpers": {"wan": wan is not None, "zimage": image is not None},
                 "inventory": inventory,
                 "localModels": local_model_choices(inventory),
+                "localPlannerModels": local_planner_choices(),
+                "apiPlannerModels": api_planner_choices(),
                 "cloudModels": cloud_model_choices(),
                 "systemStats": system_stats,
             }

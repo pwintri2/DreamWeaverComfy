@@ -18,6 +18,14 @@ export async function startComfy() {
   }));
 }
 
+export async function resetComfy(payload = {}) {
+  return readJson(await fetch("/api/reset-comfy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}
+
 export async function startDream(payload) {
   return readJson(await fetch("/api/dream", {
     method: "POST",
@@ -28,6 +36,14 @@ export async function startDream(payload) {
 
 export async function startComic(payload) {
   return readJson(await fetch("/api/comic", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+}
+
+export async function createStoryBrief(payload) {
+  return readJson(await fetch("/api/comic/brief", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

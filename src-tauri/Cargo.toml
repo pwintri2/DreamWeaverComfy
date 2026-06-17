@@ -1,6 +1,6 @@
 [package]
 name = "dreamweaver-comfy"
-version = "0.2.4"
+version = "0.2.9"
 description = "Dreamweaver Comfy comic and dream desktop shell"
 authors = ["WintripAI"]
 edition = "2021"

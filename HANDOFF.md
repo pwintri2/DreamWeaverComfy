@@ -1,6 +1,6 @@
 # DreamweaverComfy Handoff
 
-Datum: 2026-06-12
+Datum: 2026-06-17
 Projectmap: `/home/pwintri2/DreamweaverComfy`
 Context: lokale ComfyUI/Tauri-stripgenerator. Ouroboros/WintripAI blijven buiten scope.
 
@@ -14,9 +14,9 @@ verhaal niet raden; de planner bepaalt wie waar in beeld is en wat juist niet.
 
 ## Versie en git
 
-- App-versie: `0.2.4` (nog niet opgehoogd, ondanks veel wijzigingen).
-- **Nieuw deze sessie:** de map is nu een **git-repo** (was er niet). Alle werk
-  staat in commits, terug te draaien. `git log --oneline` toont de historie.
+- App-versie: `0.2.9`.
+- De map is een **git-repo**. Deze handoff hoort bij de v0.2.9-versie die aan het
+  einde van de sessie gecommit is; `git log --oneline -1` toont de exacte commit.
 - `.gitignore` sluit `node_modules/`, `src-tauri/target/`, `src-tauri/gen/`,
   `__pycache__/`, builds en **`data/`** (secrets!) uit.
 
@@ -30,8 +30,7 @@ Belangrijke bestanden:
 ## Runtime
 
 ```text
-Dreamweaver preview: http://127.0.0.1:8791   (ACTUEEL)
-Oude preview:        http://127.0.0.1:8788   (oude code, pid 1177681 — laten staan/zelf stoppen)
+Dreamweaver preview: http://127.0.0.1:8791   (actueel getest als v0.2.9)
 ComfyUI:             http://127.0.0.1:8188   (draait, ~OK)
 Ollama:              http://127.0.0.1:11434
 ```
@@ -48,6 +47,18 @@ draait oude code (symptoom: nieuwe endpoints geven HTTP 404). Bij herstart gaan
 in-memory jobs verloren → storyboard opnieuw draaien voor een verse jobId.
 UI altijd hard herladen zodat nieuwe `main.js`/`api.js` laden.
 
+Standalone Tauri:
+
+```text
+Lokale binary: /home/pwintri2/DreamweaverComfy/src-tauri/target/release/dreamweaver-comfy
+Nieuw pakket:  /home/pwintri2/DreamweaverComfy/src-tauri/target/release/bundle/deb/Dreamweaver Comfy_0.2.9_amd64.deb
+Appmenu:       ~/.local/share/applications/Dreamweaver Comfy.desktop wijst naar scripts/launch-desktop.sh
+```
+
+Let op: de systeempackage `/usr/bin/dreamweaver-comfy` stond nog op `0.1.2`
+omdat `sudo dpkg -i ...` een wachtwoord vroeg. De user-level launcher start wel
+de nieuwe lokale `0.2.9` Tauri-binary.
+
 Optionele env-tuning:
 
 ```sh
@@ -56,6 +67,8 @@ export OLLAMA_PANEL_PROMPT_TIMEOUT=60
 export OPENAI_MODEL=gpt-4o-mini
 export ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 export GEMINI_MODEL=gemini-2.0-flash
+export GROK_MODEL=grok-4.3
+export XAI_API_KEY=xai-...
 ```
 
 ## Wat deze sessie is gebouwd
@@ -74,9 +87,8 @@ export GEMINI_MODEL=gemini-2.0-flash
   beschrijving" in de paneldetails.
 
 ### Vertaling naar Engels
-- Mood/locatie-output, exit/absence/empty-cues en fallback-personagenamen
-  (`Narrator`/`Protagonist`) zijn Engels; de input is altijd Engels. Voorheen
-  vielen die terug op Nederlandse defaults.
+- Mood/locatie-output en exit/absence/empty-cues zijn Engels; de input is altijd
+  Engels. Voorheen vielen die terug op Nederlandse defaults.
 
 ### Editor (D)
 - **Bewerkbare panels**: positieve/negatieve prompt per panel aanpassen
@@ -103,7 +115,7 @@ export GEMINI_MODEL=gemini-2.0-flash
 
 ### API-keys-pagina (Goose-stijl)
 - Tandwiel ⚙ → "API-keys koppelen…" opent een dialoog met een kaart per provider
-  (OpenAI, Anthropic, Google Gemini, Replicate): gemaskeerde status, wachtwoordveld,
+  (OpenAI, Anthropic, Google Gemini, xAI Grok, Replicate): gemaskeerde status, wachtwoordveld,
   Bewaar/verwijder, doc-link.
 - Keys in `data/secrets.json` (gitignored, `chmod 600`). API geeft alleen
   gemaskeerde keys terug (`sk-…ABCD`). Opgeslagen key heeft voorrang op env.
@@ -114,6 +126,7 @@ export GEMINI_MODEL=gemini-2.0-flash
   Gemini generateContent — elk JSON-output. Eén dispatcher (`planner_generate_json`)
   routeert op engine-type en haalt de key via `get_provider_key`.
 - **Key komt nooit in de engine-dict, job-state of logs.**
+  Grok gebruikt `XAI_API_KEY` en standaardmodel `GROK_MODEL=grok-4.3`.
 - Chunk-analyse, per-panel grounding én globale synthese lopen allemaal door de
   dispatcher; een gekoppelde cloud-key verbetert het begrip overal. Per-chunk
   graceful fallback naar lokale regels bij fouten.
@@ -133,16 +146,84 @@ export GEMINI_MODEL=gemini-2.0-flash
   - Karakter continuityPrompts en reference prompts benadrukken "this character only / one single person / no other people".
   - Deze changes maken de gegenereerde prompts veel explicieter over "wie wel / wie niet", wat de trouw aan het geplande verhaal verbetert binnen de limieten van Z-Image/Wan txt2img (geen echte reference injection mogelijk).
 
+### Extra contextbegrip (follow-up 2026-06-13)
+- **Panel continuity ledger** toegevoegd (`panel.continuity`):
+  - vorige panelbeat + zichtbare cast;
+  - focusobjecten uit de world bible en beattekst;
+  - locatiecontinuiteit;
+  - per relevant personage status (`visible`, `off-screen`, `exiting after this panel`) met laatst geziene panel/locatie;
+  - notities zoals "panel is explicitly empty" of "leaving now".
+- Deze ledger wordt meegegeven aan `panel_story_context`, zodat de LLM-grounding meer context heeft om pronouns/ambiguiteit te begrijpen zonder vorige gebeurtenissen letterlijk in het nieuwe panel te tekenen.
+- `build_panel_prompt` krijgt compacte focusobjecten mee in de positieve prompt.
+- UI toont de ledger in paneldetails onder "Context".
+- Pipeline blijft `chunked_story_bible_v2`; deze tussenstap was appversie `0.2.5`.
+
+### Regiebriefing + 4-panelsets (follow-up 2026-06-13, v0.2.6)
+- Nieuwe eerste stap: **Analyseer verhaal** roept `POST /api/comic/brief` aan en
+  bouwt `story_brief_v1` met samenvatting, gevonden personages, world bible en
+  verduidelijkingsvragen.
+- UI toont een **Regiebriefing** waar de gebruiker personagenotities kan invullen
+  (`geen personage` verwijdert een fout gedetecteerd personage) en vragen kan
+  beantwoorden over echte cast, vast uiterlijk, metaforen, verboden extra figuren
+  en objectcontinuiteit.
+- `POST /api/comic` accepteert nu `storyBrief` + `storyAnswers`. Deze antwoorden
+  worden samengevoegd tot `userGuidance` en toegepast op:
+  - character `visualSignature` / `continuityPrompt`;
+  - filtering van foutieve personages;
+  - globale story context;
+  - positieve prompts;
+  - negatieve prompts tegen literalized metaphor / silent extra figures.
+- A4-pagina's zijn nu coherent geplande **sets van maximaal 4 panels**. Iedere
+  set krijgt `panelSets[]`, `page.setReview` en `panel.setReview`; latere sets
+  worden gecontroleerd tegen de vorige set. LLM-review wordt gebruikt voor de
+  eerste `DREAMWEAVER_LLM_SET_REVIEW_MAX_SETS` sets als een LLM-planner actief is,
+  anders valt het terug op lokale continuity-regels.
+- Deze stap zat in `0.2.6`; de actuele preview hoort na herstart `0.2.9` te zijn.
+
+### Noodreset + literal-only promptfilter (follow-up 2026-06-13, v0.2.7)
+- Nieuwe knop **Reset GPU** naast Start ComfyUI.
+- Nieuwe endpoint `POST /api/reset-comfy`:
+  - markeert open Dreamweaver-jobs als reset aangevraagd;
+  - stuurt ComfyUI `/interrupt`;
+  - wist ComfyUI `/queue`;
+  - wist in-memory `/history`;
+  - stuurt `/free` met `unload_models` + `free_memory`;
+  - geeft queuecounts en VRAM voor/na terug.
+- Promptlaag aangescherpt:
+  - abstracte locaties zoals `my own life`, `heart`, `mind`, `thought` worden niet
+    meer als scene location gebruikt;
+  - lokale fallback maakt zichtbare actie-only tekst: dialoog, gedachten en
+    figuurlijke vergelijkingen worden uit de positieve prompt gehaald;
+  - LLM-grounding valt bij twijfel niet meer terug op rauwe proza, maar op deze
+    lokale visual-only fallback;
+  - `geen personage`-notities worden niet meer in de positieve prompt gezet, maar
+    als negatieve guidance verwerkt.
+  - lokale regels verzinnen niet meer automatisch `Narrator`/`Protagonist` als
+    personage wanneer er geen echte naam wordt gevonden.
+
+### Grok API-planner (follow-up 2026-06-17, v0.2.8)
+- API-key dialoog heeft nu provider **xAI Grok** (`XAI_API_KEY` of lokaal opgeslagen key).
+- Verhaalplanner-dropdown toont **Grok API (`grok-4.3`)** als cloudplanner.
+- Dispatcher gebruikt de xAI OpenAI-compatible endpoint `https://api.x.ai/v1/chat/completions`.
+
+### Gesplitste verhaalplanner-keuze (follow-up 2026-06-17, v0.2.9)
+- Stripformulier heeft nu **Plannerbron**, **Lokale planner** en **API-model** als
+  aparte dropdowns.
+- Lokale planner toont lokale regels + alle bruikbare Ollama-modellen.
+- API-model toont OpenAI, Anthropic, Gemini en Grok naast de lokale plannerkeuze;
+  niet-gekoppelde providers blijven zichtbaar met `key nodig`.
+
 ## Wat werkt
 
-- Storyboard-pipeline (`chunked_story_bible_v1`): chunks → personages → world
+- Storyboard-pipeline (`chunked_story_bible_v2`): chunks → personages → world
   bible → scenes → panels → A4-pagina's.
 - Documentinvoer: `.txt`, `.md`, `.docx`, tekst-PDF (geen OCR).
 - Lokale render via **Z-Image Turbo** (txt2img) en **Wan 2.1/2.2** (video-still
   per panel). Checkpoint-workflow bestaat maar `models/checkpoints/` is leeg.
-- Cast-logica: zichtbaar/afwezig/vertrekkend per scene en panel; lege scenes.
+- Cast-logica: zichtbaar/afwezig/vertrekkend per scene en panel; lege scenes; panel-level continuity ledger; 4-panel setreviews.
 - Dialoog-extractie + spreker-toewijzing (regelgebaseerd, geen LLM nodig).
-- API-keys koppelen + cloud-planner (Gemini was live al "configured" via env-key).
+- API-keys koppelen + cloud-planner; Gemini en Grok zijn als `configured`
+  zichtbaar getest in `/api/status` en de Tauri-wrapper.
 - Editor: prompt bewerken + per-panel/portret opnieuw renderen.
 
 ## Wat NOG NIET (goed) werkt — eerlijke staat
@@ -153,14 +234,15 @@ export GEMINI_MODEL=gemini-2.0-flash
   2. Portret wordt nog steeds **niet in de panels geïnjecteerd** (geen img2img/IP-Adapter op Z-Image stack), dus portretten dienen puur als referentie/visuele bible.
 - **Tekstballonnen (#3) zijn NOG NIET gebouwd.** Alleen de data (`panel.dialogue`)
   wordt gevuld; er is nog geen overlay-rendering. Daarom zie je geen ballonnen.
-- **Cloud-planner live niet end-to-end getest** met een echte betaalde call
-  (offline gemockt en geverifieerd; Gemini-key was in env aanwezig). Let op
-  kosten/latency: calls **per chunk én per panel** + 1 synthese-call.
+- **Cloud-planner live niet end-to-end getest** met een echte betaalde verhaal-call.
+  Status/UI is wel geverifieerd: Gemini en Grok verschenen als configured
+  API-planners. Let op kosten/latency: calls **per chunk én per panel** + 1
+  synthese-call.
 - **Echte identity-lock (IP-Adapter/InstantID) kan niet** op de huidige stack:
   alleen Z-Image Turbo + Wan; geen SDXL/SD1.5-checkpoint en geen
   ipadapter/clip_vision/controlnet-modellen of -nodes. Die tools zijn voor
   SDXL/SD1.5 en werken niet op Z-Image. (= "optie 2", apart traject.)
-- OCR voor gescande PDF's ontbreekt. App-versie nog niet opgehoogd.
+- OCR voor gescande PDF's ontbreekt.
 
 ## ComfyUI / VRAM
 
@@ -176,11 +258,13 @@ export GEMINI_MODEL=gemini-2.0-flash
 ## Belangrijke endpoints
 
 ```text
+POST /api/comic/brief                story briefing + vragen
 POST /api/comic                      start storyboard/strip-job
 GET  /api/jobs/{id}                  jobstatus + comic
 POST /api/comic/update-panel         panelprompt bewerken
 POST /api/comic/regenerate-panel     1 panel opnieuw renderen
 POST /api/comic/character-reference  portret per personage
+POST /api/reset-comfy                queue interrupten/wissen + VRAM vrijvragen
 GET  /api/secrets                    providerstatus (gemaskeerd)
 POST /api/secrets                    key opslaan/verwijderen
 GET  /api/status                     versie, ComfyUI, modellen, planners
@@ -194,7 +278,7 @@ POST /api/extract-text               documentextractie
    renderen (auto-plaatsing + bewerkbaar, meegenomen in print/export).
 3. **Beeld-naar-verhaal-trouw** verhogen: referentiebeeld-injectie of een
    SDXL+IP-Adapter-traject (optie 2 — eerst installplan, grote downloads). Prompt-verbeteringen (cast-strict + grounded-gates) helpen maar kunnen de limiet van de huidige Z-Image/Wan stack niet volledig overwinnen.
-4. Cloud-planner live end-to-end testen met een echte key; kosten/latency meten.
+4. Cloud-planner live end-to-end testen met Gemini/Grok; kosten/latency meten.
 5. In-app modellen downloaden (keuze a) + app-versie ophogen + OCR.
 
 ## Belangrijk voor de volgende agent
@@ -208,4 +292,6 @@ POST /api/extract-text               documentextractie
 cd /home/pwintri2/DreamweaverComfy
 python3 -m py_compile server.py
 npm run check
+cargo check --manifest-path src-tauri/Cargo.toml
+npm run tauri:build
 ```
