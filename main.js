@@ -1,10 +1,10 @@
-import { cancelJob, createStoryBrief, extractDocumentText, generateCharacterReference, getJob, getSecrets, getStatus, regenerateComicPanel, resetComfy, saveSecret, startComic, startComfy, startDream, updateComicPanel } from "./api.js?v=0.2.9";
-import { setState } from "./state.js?v=0.2.9";
-import { addDream } from "./storage.js?v=0.2.9";
-import { initBackground } from "./ui/background.js?v=0.2.9";
-import { playDream, stopDream, togglePause } from "./ui/dream-player.js?v=0.2.9";
-import { renderHistory } from "./ui/history-view.js?v=0.2.9";
-import { showToast } from "./ui/toast-view.js?v=0.2.9";
+import { cancelJob, createStoryBrief, extractDocumentText, generateCharacterReference, getJob, getSecrets, getStatus, regenerateComicPanel, resetComfy, saveSecret, startComic, startComfy, startDream, updateComicPanel } from "./api.js?v=0.2.10";
+import { setState } from "./state.js?v=0.2.10";
+import { addDream } from "./storage.js?v=0.2.10";
+import { initBackground } from "./ui/background.js?v=0.2.10";
+import { playDream, stopDream, togglePause } from "./ui/dream-player.js?v=0.2.10";
+import { renderHistory } from "./ui/history-view.js?v=0.2.10";
+import { showToast } from "./ui/toast-view.js?v=0.2.10";
 
 const views = {
   comic: document.getElementById("comicView"),
@@ -161,6 +161,41 @@ function syncPlannerControls() {
   }
 }
 
+function syncDreamRendererControls() {
+  const rendererSelect = document.getElementById("dreamRendererSelect");
+  const modeSelect = document.getElementById("modeSelect");
+  const modelSelect = document.getElementById("modelSelect");
+  const durationSelect = document.getElementById("durationSelect");
+  const hint = document.getElementById("dreamRendererHint");
+  const safetyNote = document.getElementById("safetyNote");
+  const renderer = rendererSelect?.value || "local";
+  const grokMode = renderer === "grok";
+
+  if (grokMode && modeSelect) {
+    modeSelect.value = "images";
+  }
+  [modeSelect, modelSelect, durationSelect].forEach((select) => {
+    if (!select) return;
+    select.disabled = grokMode;
+    select.closest("label")?.classList.toggle("is-inactive", grokMode);
+  });
+  if (hint) {
+    const selected = rendererSelect?.selectedOptions?.[0];
+    if (selected?.dataset.configured === "false") {
+      hint.textContent = "Koppel eerst xAI Grok via API-keys.";
+    } else if (grokMode) {
+      hint.textContent = "Maakt vier Grok-beelden uit de achtergrond-symboliek.";
+    } else {
+      hint.textContent = "Lokale Wan/Z-Image flow via ComfyUI.";
+    }
+  }
+  if (safetyNote) {
+    safetyNote.textContent = grokMode
+      ? "De originele tekst blijft lokaal; alleen de vertaalde subliminale symboolprompt gaat naar Grok."
+      : "Elke tekst wordt omgezet naar beeldsymboliek; de originele tekst gaat niet naar het beeldmodel.";
+  }
+}
+
 function updateStoryCount() {
   const input = document.getElementById("storyInput");
   const words = countWords(input.value);
@@ -190,6 +225,11 @@ function updateProgress(status) {
   const statusMap = {
     queued: ["Job aangemaakt.", 10],
     prepared: ["Prompt veilig getransformeerd.", 20],
+    queued_grok: ["Grok krijgt de symbolische prompt.", 28],
+    rendering_grok_image_1: ["Grok beeld 1 van 4 rendert.", 38],
+    rendering_grok_image_2: ["Grok beeld 2 van 4 rendert.", 54],
+    rendering_grok_image_3: ["Grok beeld 3 van 4 rendert.", 70],
+    rendering_grok_image_4: ["Grok beeld 4 van 4 rendert.", 86],
     queued_video: ["Wan video staat in de ComfyUI queue.", 32],
     rendering_video: ["Wan video rendert. Dit kan even duren.", 62],
     rendering_image_1: ["Z-Image beeld 1 van 4 rendert.", 32],
@@ -224,6 +264,7 @@ function renderAudit(dream) {
   const transformed = dream.transformed || {};
   const grammar = transformed.visualGrammar || {};
   const grammarItems = [
+    dream.renderer === "grok" ? "beeldmaker: Grok Imagine" : null,
     grammar.environment,
     grammar.symbol,
     grammar.material,
@@ -586,6 +627,7 @@ async function refreshStatus() {
     statusElement.textContent = `${status.comfyRunning ? "online" : "offline"} · ${models}`;
     statusElement.style.color = status.comfyRunning ? "var(--good)" : "var(--muted)";
     document.getElementById("startComfyBtn").disabled = status.comfyRunning;
+    setOptions(document.getElementById("dreamRendererSelect"), status.dreamRenderers || [], "Standaard lokaal");
     setOptions(document.getElementById("localComicModelSelect"), status.localModels || [], "Auto");
     const combinedPlanners = status.cloudModels || [];
     const localPlanners = status.localPlannerModels || combinedPlanners.filter((item) => ["local", "ollama"].includes(item.provider));
@@ -596,6 +638,7 @@ async function refreshStatus() {
       preferFirstConfigured: true,
     });
     syncPlannerControls();
+    syncDreamRendererControls();
     setState({ status });
   } catch (error) {
     statusElement.textContent = error.message;
@@ -790,9 +833,11 @@ async function pollCharacterRef(jobId, characterId) {
 
 function payloadFromForm() {
   const [width, height] = document.getElementById("sizeSelect").value.split("x").map(Number);
+  const renderer = document.getElementById("dreamRendererSelect")?.value || "local";
   return {
     desire: document.getElementById("desireInput").value.trim(),
-    mode: document.getElementById("modeSelect").value,
+    renderer,
+    mode: renderer === "grok" ? "images" : document.getElementById("modeSelect").value,
     model: document.getElementById("modelSelect").value,
     seconds: Number(document.getElementById("durationSelect").value),
     width,
@@ -955,6 +1000,7 @@ function bindEvents() {
   desireInput.addEventListener("input", () => {
     document.getElementById("charCount").textContent = `${desireInput.value.length} / 300`;
   });
+  document.getElementById("dreamRendererSelect").addEventListener("change", syncDreamRendererControls);
 
   const storyInput = document.getElementById("storyInput");
   storyInput.addEventListener("input", () => {

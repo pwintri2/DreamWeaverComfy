@@ -250,6 +250,7 @@ input:focus {
   line-height: 1.35;
 }
 
+.is-inactive,
 .planner-field.is-inactive {
   opacity: 0.58;
 }

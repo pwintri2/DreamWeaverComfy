@@ -14,6 +14,11 @@ function escapeHtml(text) {
   })[char]);
 }
 
+function dreamTypeLabel(dream) {
+  if (dream.renderer === "grok") return "Grok Imagine slideshow";
+  return dream.resultType === "video" ? "Wan video" : "Z-Image slideshow";
+}
+
 export function renderHistory(onReplay) {
   const list = document.getElementById("historyList");
   const history = loadHistory();
@@ -27,7 +32,7 @@ export function renderHistory(onReplay) {
     card.className = "history-card";
     card.innerHTML = `
       <header>
-        <strong>${dream.resultType === "video" ? "Wan video" : "Z-Image slideshow"}</strong>
+        <strong>${escapeHtml(dreamTypeLabel(dream))}</strong>
         <button class="ghost-button" type="button" data-delete>Verwijder</button>
       </header>
       <p>${escapeHtml(truncate(dream.desire || "Geen tekst"))}</p>

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Dreamweaver Comfy",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "identifier": "ai.wintrip.Dreamweaver",
   "build": {
     "beforeDevCommand": "",

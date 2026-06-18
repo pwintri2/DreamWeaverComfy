@@ -38,7 +38,7 @@ import xml.etree.ElementTree as ET
 
 
 APP_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.2.9"
+APP_VERSION = "0.2.10"
 DEFAULT_COMFY_PATH = Path(os.environ.get("COMFYUI_PATH", "/home/pwintri2/ComfyUI"))
 DEFAULT_COMFY_URL = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188").rstrip("/")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -46,6 +46,7 @@ OLLAMA_PLANNER_TIMEOUT = float(os.environ.get("OLLAMA_PLANNER_TIMEOUT", "180"))
 OLLAMA_PANEL_PROMPT_TIMEOUT = float(os.environ.get("OLLAMA_PANEL_PROMPT_TIMEOUT", "60"))
 COMFY_IMAGE_TIMEOUT = float(os.environ.get("DREAMWEAVER_COMFY_IMAGE_TIMEOUT", "600"))
 COMFY_VIDEO_TIMEOUT = float(os.environ.get("DREAMWEAVER_COMFY_VIDEO_TIMEOUT", "3600"))
+XAI_IMAGE_TIMEOUT = float(os.environ.get("DREAMWEAVER_XAI_IMAGE_TIMEOUT", "240"))
 COMFY_MISSING_HISTORY_GRACE = float(os.environ.get("DREAMWEAVER_COMFY_MISSING_HISTORY_GRACE", "20"))
 
 LLM_ENGINE_TYPES = {"ollama", "openai", "anthropic", "google", "xai"}
@@ -53,6 +54,7 @@ DEFAULT_OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 DEFAULT_ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 DEFAULT_GROK_MODEL = os.environ.get("GROK_MODEL", os.environ.get("XAI_MODEL", "grok-4.3"))
+DEFAULT_GROK_IMAGE_MODEL = os.environ.get("GROK_IMAGE_MODEL", "grok-imagine-image-quality")
 XAI_API_BASE_URL = os.environ.get("XAI_API_BASE_URL", "https://api.x.ai/v1").rstrip("/")
 CLOUD_PLANNER_IDS = {
     "openai:env": ("openai", DEFAULT_OPENAI_MODEL),
@@ -68,6 +70,7 @@ VIDEO_FRAME_LIMIT = 48
 DATA_DIR = Path(os.environ.get("DREAMWEAVER_DATA_DIR", str(APP_DIR / "data")))
 SECRETS_FILE = DATA_DIR / "secrets.json"
 SECRETS_LOCK = threading.Lock()
+DREAM_MEDIA_DIR = DATA_DIR / "dream_media"
 
 # Provider catalog for the API-keys page. envVar is the legacy env fallback; keys saved in the
 # UI are stored locally in SECRETS_FILE (gitignored, chmod 600) and take precedence over env.
@@ -1069,6 +1072,42 @@ def transform_desire(desire: str) -> dict[str, Any]:
         "visualMessage": grammar["message"],
         "forbiddenWords": sorted(forbidden),
     }
+
+
+def grok_dream_frame_prompt(transformed: dict[str, Any], frame_prompt: str, index: int) -> str:
+    grammar = transformed.get("visualGrammar") if isinstance(transformed.get("visualGrammar"), dict) else {}
+    profile = transformed.get("symbolicProfile") if isinstance(transformed.get("symbolicProfile"), dict) else {}
+    parts = [
+        "Create one high-detail image for a silent sliding dream-video sequence.",
+        "Use only symbolic subconscious imagery; do not show readable words, letters, captions, logos, or watermarks.",
+        "Do not include the user's original sentence. Visualize only the translated subliminal symbol.",
+        f"Subliminal symbol: {grammar.get('symbol') or 'a luminous abstract symbol'}.",
+        f"Material: {grammar.get('material') or 'soft luminous glass'}.",
+        f"Environment: {grammar.get('environment') or 'a surreal calm dream landscape'}.",
+        f"Palette: {grammar.get('palette') or 'deep indigo, pearl white, and warm amber'}.",
+        f"Motion feeling: {grammar.get('motion') or 'soft parallax layers drift in opposite directions'}.",
+        f"Transition energy: {grammar.get('transition') or 'from shadow to warm clarity'}.",
+        f"Inner visual message: {transformed.get('visualMessage') or 'the wish becomes a symbolic moving landscape'}.",
+        f"Theme: {profile.get('theme') or transformed.get('category') or 'transformation'}.",
+        f"Frame {index} of 4 should feel like part of a smooth slideshow arc.",
+        frame_prompt,
+        "Style: cinematic surreal dream art, polished, luminous, calm, no text, no people unless the symbol itself requires a non-identifiable silhouette.",
+    ]
+    return trim_text(" ".join(str(part).strip() for part in parts if str(part).strip()), 2800)
+
+
+def grok_aspect_ratio(width: int, height: int) -> str:
+    ratio = width / max(1, height)
+    candidates = {
+        "1:1": 1.0,
+        "16:9": 16 / 9,
+        "9:16": 9 / 16,
+        "4:3": 4 / 3,
+        "3:4": 3 / 4,
+        "3:2": 3 / 2,
+        "2:3": 2 / 3,
+    }
+    return min(candidates.items(), key=lambda item: abs(item[1] - ratio))[0]
 
 
 def scan_models(comfy_path: Path) -> dict[str, Any]:
@@ -2552,6 +2591,66 @@ def xai_generate_json(key: str, model: str, system_prompt: str, user_prompt: str
     choices = body.get("choices") or [{}]
     content = (choices[0].get("message") or {}).get("content") if isinstance(choices[0], dict) else ""
     return parse_json_object(str(content or ""))
+
+
+def _http_binary(url: str, headers: dict[str, str] | None = None, timeout: float = XAI_IMAGE_TIMEOUT) -> tuple[bytes, str]:
+    req = urllib.request.Request(url, method="GET")
+    for name, value in (headers or {}).items():
+        req.add_header(name, value)
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        body = response.read()
+        content_type = response.headers.get("Content-Type") or "application/octet-stream"
+    return body, content_type.split(";", 1)[0].strip().lower()
+
+
+def decode_image_b64(value: str) -> tuple[bytes, str]:
+    mime_type = "image/jpeg"
+    encoded = value
+    match = re.match(r"^data:([^;,]+);base64,(.*)$", value, re.DOTALL)
+    if match:
+        mime_type = match.group(1).strip().lower() or mime_type
+        encoded = match.group(2)
+    return base64.b64decode(encoded, validate=False), mime_type
+
+
+def xai_generate_image(
+    key: str,
+    prompt: str,
+    aspect_ratio: str,
+    timeout: float = XAI_IMAGE_TIMEOUT,
+) -> dict[str, Any]:
+    body = _http_json(
+        f"{XAI_API_BASE_URL}/images/generations",
+        {
+            "model": DEFAULT_GROK_IMAGE_MODEL,
+            "prompt": prompt,
+            "response_format": "b64_json",
+            "aspect_ratio": aspect_ratio,
+            "resolution": "1k",
+            "n": 1,
+        },
+        {"Authorization": f"Bearer {key}"},
+        timeout,
+    )
+    data = body.get("data") or []
+    if not data or not isinstance(data[0], dict):
+        raise RuntimeError("Grok gaf geen beeld-output terug.")
+    item = data[0]
+    mime_type = str(item.get("mime_type") or "image/jpeg").split(";", 1)[0].strip().lower()
+    if item.get("b64_json"):
+        content, decoded_mime = decode_image_b64(str(item["b64_json"]))
+        mime_type = decoded_mime or mime_type
+    elif item.get("url"):
+        content, downloaded_mime = _http_binary(str(item["url"]), timeout=timeout)
+        mime_type = downloaded_mime or mime_type
+    else:
+        raise RuntimeError("Grok beeld-output bevat geen URL of base64-data.")
+    return {
+        "content": content,
+        "mimeType": mime_type,
+        "revisedPrompt": item.get("revised_prompt") or "",
+        "usage": body.get("usage") if isinstance(body.get("usage"), dict) else {},
+    }
 
 
 def planner_generate_json(
@@ -4490,6 +4589,25 @@ def provider_status() -> list[dict[str, Any]]:
     return result
 
 
+def dream_renderer_choices() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "local",
+            "label": "Standaard lokaal (Wan/Z-Image)",
+            "provider": "local",
+            "configured": True,
+            "description": "Huidige lokale Droom-flow via ComfyUI.",
+        },
+        {
+            "id": "grok",
+            "label": f"Grok Imagine slideshow ({DEFAULT_GROK_IMAGE_MODEL})",
+            "provider": "xai",
+            "configured": bool(get_provider_key("xai")),
+            "description": "Maakt vier sliding beelden via xAI; alleen de symbolische prompt wordt verstuurd.",
+        },
+    ]
+
+
 def local_planner_choices() -> list[dict[str, Any]]:
     ollama_models = available_ollama_models()
     choices: list[dict[str, Any]] = [
@@ -4676,6 +4794,32 @@ def job_get(job_id: str) -> dict[str, Any] | None:
     with JOBS_LOCK:
         job = JOBS.get(job_id)
         return None if job is None else dict(job)
+
+
+def media_extension(mime_type: str) -> str:
+    return {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }.get(mime_type.lower().split(";", 1)[0].strip(), ".jpg")
+
+
+def dream_media_url(filename: str) -> str:
+    return f"/api/dream-media?{urllib.parse.urlencode({'file': filename})}"
+
+
+def save_dream_media(content: bytes, mime_type: str, prefix: str = "grok") -> str:
+    DREAM_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    safe_prefix = re.sub(r"[^a-zA-Z0-9_-]+", "_", prefix).strip("_") or "dream"
+    filename = f"{safe_prefix}_{int(time.time())}_{uuid.uuid4().hex[:12]}{media_extension(mime_type)}"
+    target = (DREAM_MEDIA_DIR / filename).resolve()
+    root = DREAM_MEDIA_DIR.resolve()
+    if not target.is_relative_to(root):
+        raise ValueError("Ongeldige dream media-bestandsnaam.")
+    target.write_bytes(content)
+    return dream_media_url(filename)
 
 
 def entry_url(entry: dict[str, Any]) -> str:
@@ -5293,17 +5437,69 @@ def run_dream_job(job_id: str, payload: dict[str, Any]) -> None:
         desire = str(payload.get("desire", "")).strip()
         if not re.search(r"[\wÀ-ÿ]", desire):
             raise ValueError("Typ eerst iets dat verbeeld mag worden.")
-        comfy_request("/system_stats", timeout=3)
         transformed = transform_desire(desire)
-        inventory = scan_models(comfy_path)
+        renderer = str(payload.get("renderer") or "local").strip().lower()
+        if renderer not in {"local", "grok"}:
+            renderer = "local"
         mode = str(payload.get("mode") or "video")
-        width = int(payload.get("width") or 512)
-        height = int(payload.get("height") or 512)
-        seed = int(payload.get("seed") or 0)
+        width = bounded_int(payload.get("width"), 512, 256, 2048)
+        height = bounded_int(payload.get("height"), 512, 256, 2048)
+        seed = bounded_int(payload.get("seed"), 0, 0, 2**63 - 1)
         if seed <= 0:
             seed = random.randint(1, 2**32 - 1)
 
-        job_update(job_id, status="prepared", transformed=transformed, inventory=inventory, seed=seed)
+        job_update(job_id, status="prepared", transformed=transformed, renderer=renderer, seed=seed)
+
+        if renderer == "grok":
+            key = get_provider_key("xai")
+            if not key:
+                raise RuntimeError("Koppel eerst een xAI Grok API-key via Instellingen > API-keys.")
+            aspect_ratio = grok_aspect_ratio(width, height)
+            grok_prompts = [
+                grok_dream_frame_prompt(transformed, frame_prompt, index)
+                for index, frame_prompt in enumerate(transformed["imagePrompts"], start=1)
+            ]
+            transformed = dict(transformed)
+            transformed["grokPrompts"] = grok_prompts
+            urls: list[str] = []
+            revised_prompts: list[str] = []
+            usage_items: list[dict[str, Any]] = []
+            job_update(
+                job_id,
+                status="queued_grok",
+                transformed=transformed,
+                resultType="images",
+                model=DEFAULT_GROK_IMAGE_MODEL,
+                mediaUrls=urls,
+            )
+            for index, prompt in enumerate(grok_prompts, start=1):
+                current = job_get(job_id) or {}
+                if current.get("cancelRequested"):
+                    job_update(job_id, done=True, status="cancelled", mediaUrls=urls)
+                    return
+                job_update(job_id, status=f"rendering_grok_image_{index}", currentImage=index, mediaUrls=urls)
+                result = xai_generate_image(key, prompt, aspect_ratio)
+                urls.append(save_dream_media(result["content"], result["mimeType"], f"grok_dream_{index}"))
+                if result.get("revisedPrompt"):
+                    revised_prompts.append(str(result["revisedPrompt"]))
+                if result.get("usage"):
+                    usage_items.append(result["usage"])
+            job_update(
+                job_id,
+                done=True,
+                status="success",
+                resultType="images",
+                renderer="grok",
+                model=DEFAULT_GROK_IMAGE_MODEL,
+                mediaUrls=urls,
+                revisedPrompts=revised_prompts,
+                usage=usage_items,
+            )
+            return
+
+        comfy_request("/system_stats", timeout=3)
+        inventory = scan_models(comfy_path)
+        job_update(job_id, inventory=inventory)
 
         if mode == "video":
             if wan is None:
@@ -5450,6 +5646,7 @@ class Handler(BaseHTTPRequestHandler):
                         "localPlannerModels": local_planner_choices(),
                         "apiPlannerModels": api_planner_choices(),
                         "cloudModels": cloud_model_choices(),
+                        "dreamRenderers": dream_renderer_choices(),
                         "inventory": inventory,
                     }
                 )
@@ -5468,6 +5665,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.handle_video_frames(parsed.query)
             elif parsed.path == "/api/frame":
                 self.serve_cached_frame(parsed.query)
+            elif parsed.path == "/api/dream-media":
+                self.serve_dream_media(parsed.query)
             else:
                 self.serve_static(parsed.path)
         except Exception as exc:  # noqa: BLE001
@@ -5624,6 +5823,7 @@ class Handler(BaseHTTPRequestHandler):
                 "localPlannerModels": local_planner_choices(),
                 "apiPlannerModels": api_planner_choices(),
                 "cloudModels": cloud_model_choices(),
+                "dreamRenderers": dream_renderer_choices(),
                 "systemStats": system_stats,
             }
         )
@@ -5667,6 +5867,26 @@ class Handler(BaseHTTPRequestHandler):
         body = target.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "public, max-age=604800, immutable")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_dream_media(self, query: str) -> None:
+        params = urllib.parse.parse_qs(query)
+        filename = params.get("file", [""])[0]
+        if not re.fullmatch(r"[a-zA-Z0-9_.-]+", filename):
+            self.send_error(404)
+            return
+        root = DREAM_MEDIA_DIR.resolve()
+        target = (root / filename).resolve()
+        if not target.is_relative_to(root) or not target.exists() or target.is_dir():
+            self.send_error(404)
+            return
+        body = target.read_bytes()
+        content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "public, max-age=604800, immutable")
         self.end_headers()

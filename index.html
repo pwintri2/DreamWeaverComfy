@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dreamweaver Comfy</title>
-  <link rel="stylesheet" href="styles.css?v=0.2.9">
+  <link rel="stylesheet" href="styles.css?v=0.2.10">
 </head>
 <body>
   <canvas id="backgroundCanvas" aria-hidden="true"></canvas>
@@ -163,7 +163,7 @@
       <h1>Wat wil je verbeelden?</h1>
       <p class="intro">
         Typ een wens, gedachte, droomflard of losse zin. Dreamweaver vertaalt de symboliek naar een subtiele
-        beeldboodschap en gebruikt je lokale ComfyUI-modellen voor Wan-video of Z-Image droombeelden.
+        beeldboodschap en gebruikt daarna lokaal ComfyUI of Grok Imagine voor sliding droombeelden.
       </p>
 
       <form id="dreamForm" class="dream-form">
@@ -171,10 +171,18 @@
         <textarea id="desireInput" maxlength="300" placeholder="Bijv. Ik wil me kalm, helder en krachtig voelen"></textarea>
         <div class="form-row">
           <span id="charCount">0 / 300</span>
-          <span id="safetyNote">Elke tekst wordt omgezet naar beeldsymboliek; de originele tekst gaat niet naar ComfyUI.</span>
+          <span id="safetyNote">Elke tekst wordt omgezet naar beeldsymboliek; de originele tekst gaat niet naar het beeldmodel.</span>
         </div>
 
         <div class="settings-grid">
+          <label>
+            Beeldmaker
+            <select id="dreamRendererSelect">
+              <option value="local" selected>Standaard lokaal</option>
+              <option value="grok">Grok Imagine slideshow</option>
+            </select>
+            <span id="dreamRendererHint" class="field-hint">Lokale Wan/Z-Image flow.</span>
+          </label>
           <label>
             Uitvoer
             <select id="modeSelect">
@@ -276,6 +284,6 @@
   </dialog>
 
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
-  <script type="module" src="main.js?v=0.2.9"></script>
+  <script type="module" src="main.js?v=0.2.10"></script>
 </body>
 </html>
