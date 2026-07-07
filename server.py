@@ -50,6 +50,13 @@ XAI_IMAGE_TIMEOUT = float(os.environ.get("DREAMWEAVER_XAI_IMAGE_TIMEOUT", "240")
 MODELSLAB_IMAGE_TIMEOUT = float(os.environ.get("DREAMWEAVER_MODELSLAB_IMAGE_TIMEOUT", "600"))
 ATLAS_IMAGE_TIMEOUT = float(os.environ.get("DREAMWEAVER_ATLAS_IMAGE_TIMEOUT", "600"))
 COMFY_MISSING_HISTORY_GRACE = float(os.environ.get("DREAMWEAVER_COMFY_MISSING_HISTORY_GRACE", "20"))
+FLUX_SCHNELL_FP8_CHECKPOINT = (
+    os.environ.get("DREAMWEAVER_FLUX_CHECKPOINT", "flux1-schnell-fp8.safetensors").strip().replace("\\", "/")
+    or "flux1-schnell-fp8.safetensors"
+)
+if FLUX_SCHNELL_FP8_CHECKPOINT.startswith("checkpoints/"):
+    FLUX_SCHNELL_FP8_CHECKPOINT = FLUX_SCHNELL_FP8_CHECKPOINT.removeprefix("checkpoints/")
+FLUX_SCHNELL_FP8_MODEL_FILE = f"checkpoints/{FLUX_SCHNELL_FP8_CHECKPOINT}"
 
 LLM_ENGINE_TYPES = {"ollama", "openai", "anthropic", "google", "xai"}
 DEFAULT_OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
@@ -1168,6 +1175,7 @@ def scan_models(comfy_path: Path) -> dict[str, Any]:
                 "vae/ae.safetensors",
             ]
         ),
+        "flux1_schnell_fp8": FLUX_SCHNELL_FP8_MODEL_FILE in files,
         "files": sorted(files),
     }
 
@@ -5294,6 +5302,18 @@ def local_model_choices(inventory: dict[str, Any]) -> list[dict[str, Any]]:
                 "file": "diffusion_models/z_image_turbo_bf16.safetensors",
             }
         )
+    if inventory.get("flux1_schnell_fp8"):
+        choices.append(
+            {
+                "id": "flux1_schnell_fp8",
+                "label": "FLUX.1 Schnell FP8 - strip panel",
+                "provider": "local",
+                "kind": "flux_schnell_fp8",
+                "supported": True,
+                "file": FLUX_SCHNELL_FP8_MODEL_FILE,
+                "description": "Lokale FLUX.1 Schnell FP8 maakt strippanels en portretten met een lichte 4-staps workflow voor 8 GB VRAM.",
+            }
+        )
     if inventory.get("wan22"):
         choices.append(
             {
@@ -5322,6 +5342,8 @@ def local_model_choices(inventory: dict[str, Any]) -> list[dict[str, Any]]:
         if suffix not in LOCAL_MODEL_EXTENSIONS:
             continue
         if filename.startswith("checkpoints/"):
+            if filename == FLUX_SCHNELL_FP8_MODEL_FILE:
+                continue
             ckpt_name = filename.removeprefix("checkpoints/")
             choices.append(
                 {
@@ -5681,6 +5703,65 @@ def build_checkpoint_image_prompt(data: dict[str, Any]) -> dict[str, dict[str, A
     }
 
 
+def build_flux_schnell_image_prompt(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    prompt = str(data.get("prompt", "")).strip()
+    negative = str(data.get("negative_prompt", COMIC_NEGATIVE_PROMPT)).strip()
+    if negative:
+        # Schnell runs best at CFG 1.0, so hard comic exclusions travel as text rules.
+        prompt = trim_text(f"{prompt}\n\nStrict visual exclusions: {negative}.", 2000)
+    width = bounded_int(data.get("width"), 768, 256, 1536)
+    height = bounded_int(data.get("height"), 1088, 256, 1536)
+    width -= width % 16
+    height -= height % 16
+    seed = bounded_int(data.get("seed"), random.randint(0, 2**32 - 1), 0, 2**63 - 1)
+    steps = bounded_int(data.get("steps"), 4, 1, 20)
+    return {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": FLUX_SCHNELL_FP8_CHECKPOINT},
+        },
+        "2": {
+            "class_type": "ModelSamplingFlux",
+            "inputs": {"model": ["1", 0], "max_shift": 1.15, "base_shift": 0.5, "width": width, "height": height},
+        },
+        "3": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"clip": ["1", 1], "text": prompt},
+        },
+        "4": {
+            "class_type": "ConditioningZeroOut",
+            "inputs": {"conditioning": ["3", 0]},
+        },
+        "5": {
+            "class_type": "EmptySD3LatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        },
+        "6": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["2", 0],
+                "positive": ["3", 0],
+                "negative": ["4", 0],
+                "latent_image": ["5", 0],
+                "seed": seed,
+                "steps": steps,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+            },
+        },
+        "7": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["6", 0], "vae": ["1", 2]},
+        },
+        "8": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["7", 0], "filename_prefix": comfy_filename_prefix("comic_flux", str(data.get("panel_id") or "panel"))},
+        },
+    }
+
+
 def extract_comfy_error(history_item: dict[str, Any]) -> Any:
     status = history_item.get("status")
     if isinstance(status, dict) and status.get("status_str") == "error":
@@ -5698,7 +5779,7 @@ def select_comic_model(model_id: str, inventory: dict[str, Any]) -> dict[str, An
     choices = panel_model_choices(inventory)
     by_id = {str(choice["id"]): choice for choice in choices}
     if model_id == "auto":
-        for preferred in ["zimage_turbo"]:
+        for preferred in ["zimage_turbo", "flux1_schnell_fp8"]:
             choice = by_id.get(preferred)
             if choice and choice.get("supported"):
                 return choice
@@ -5818,6 +5899,28 @@ def render_comic_panel(
         entries = extract_entries(history, "image")
         if not entries:
             raise RuntimeError(f"ComfyUI gaf geen image-output terug voor {panel['id']}.")
+        return {"imageUrl": entry_url(entries[0]), "promptId": prompt_id, "mediaType": "image"}
+
+    if model_id == "flux1_schnell_fp8":
+        graph = build_flux_schnell_image_prompt(
+            {
+                "prompt": prompt,
+                "negative_prompt": negative,
+                "width": width,
+                "height": height,
+                "steps": bounded_int(payload.get("steps"), 4, 1, 20),
+                "seed": panel_seed,
+                "panel_id": panel["id"],
+            }
+        )
+        prompt_id = queue_comfy_prompt(graph, "dreamweaver-comic-flux")
+        history = wait_for_history(prompt_id, timeout=COMFY_IMAGE_TIMEOUT)
+        error = extract_comfy_error(history)
+        if error:
+            raise RuntimeError(json.dumps(error, ensure_ascii=False))
+        entries = extract_entries(history, "image")
+        if not entries:
+            raise RuntimeError(f"ComfyUI gaf geen FLUX image-output terug voor {panel['id']}.")
         return {"imageUrl": entry_url(entries[0]), "promptId": prompt_id, "mediaType": "image"}
 
     if kind == "checkpoint":

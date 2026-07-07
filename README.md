@@ -98,6 +98,7 @@ explicitly.
 Panel rendering can use the models installed in your ComfyUI:
 
 - **Z-Image Turbo** (`diffusion_models/z_image_turbo_bf16.safetensors`) — text→image.
+- **FLUX.1 Schnell FP8** (`checkpoints/flux1-schnell-fp8.safetensors`) — text→image, 4-step local workflow for 8 GB VRAM laptops.
 - **Wan 2.1 / 2.2** — text→video, one still per panel.
 - Generic SD/SDXL checkpoints from `models/checkpoints/` (if present).
 
