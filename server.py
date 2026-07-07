@@ -38,7 +38,7 @@ import xml.etree.ElementTree as ET
 
 
 APP_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.2.10"
+APP_VERSION = "0.2.13"
 DEFAULT_COMFY_PATH = Path(os.environ.get("COMFYUI_PATH", "/home/pwintri2/ComfyUI"))
 DEFAULT_COMFY_URL = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188").rstrip("/")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -47,6 +47,8 @@ OLLAMA_PANEL_PROMPT_TIMEOUT = float(os.environ.get("OLLAMA_PANEL_PROMPT_TIMEOUT"
 COMFY_IMAGE_TIMEOUT = float(os.environ.get("DREAMWEAVER_COMFY_IMAGE_TIMEOUT", "600"))
 COMFY_VIDEO_TIMEOUT = float(os.environ.get("DREAMWEAVER_COMFY_VIDEO_TIMEOUT", "3600"))
 XAI_IMAGE_TIMEOUT = float(os.environ.get("DREAMWEAVER_XAI_IMAGE_TIMEOUT", "240"))
+MODELSLAB_IMAGE_TIMEOUT = float(os.environ.get("DREAMWEAVER_MODELSLAB_IMAGE_TIMEOUT", "600"))
+ATLAS_IMAGE_TIMEOUT = float(os.environ.get("DREAMWEAVER_ATLAS_IMAGE_TIMEOUT", "600"))
 COMFY_MISSING_HISTORY_GRACE = float(os.environ.get("DREAMWEAVER_COMFY_MISSING_HISTORY_GRACE", "20"))
 
 LLM_ENGINE_TYPES = {"ollama", "openai", "anthropic", "google", "xai"}
@@ -56,6 +58,19 @@ DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 DEFAULT_GROK_MODEL = os.environ.get("GROK_MODEL", os.environ.get("XAI_MODEL", "grok-4.3"))
 DEFAULT_GROK_IMAGE_MODEL = os.environ.get("GROK_IMAGE_MODEL", "grok-imagine-image-quality")
 XAI_API_BASE_URL = os.environ.get("XAI_API_BASE_URL", "https://api.x.ai/v1").rstrip("/")
+MODELSLAB_API_BASE_URL = os.environ.get("MODELSLAB_API_BASE_URL", "https://modelslab.com/api/v6").rstrip("/")
+DEFAULT_MODELSLAB_IMAGE_MODEL = os.environ.get("MODELSLAB_IMAGE_MODEL", "flux").strip() or "flux"
+EXTRA_MODELSLAB_IMAGE_MODELS = os.environ.get("MODELSLAB_IMAGE_MODELS", "").strip()
+ATLAS_API_BASE_URL = os.environ.get(
+    "ATLAS_BASE_URL", os.environ.get("ATLASCLOUD_BASE_URL", "https://api.atlascloud.ai/api/v1")
+).rstrip("/")
+DEFAULT_ATLAS_IMAGE_MODEL = os.environ.get(
+    "ATLAS_IMAGE_MODEL", os.environ.get("ATLASCLOUD_IMAGE_MODEL", "seedream-3.0")
+).strip() or "seedream-3.0"
+EXTRA_ATLAS_IMAGE_MODELS = os.environ.get("ATLAS_IMAGE_MODELS", "").strip()
+# Atlas zit achter Cloudflare; de botfilter blokkeert niet-browser signatures
+# (403 "error code: 1010") — stuur daarom altijd een browser-achtige User-Agent mee.
+ATLAS_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Dreamweaver/1.0"
 CLOUD_PLANNER_IDS = {
     "openai:env": ("openai", DEFAULT_OPENAI_MODEL),
     "anthropic:env": ("anthropic", DEFAULT_ANTHROPIC_MODEL),
@@ -64,6 +79,11 @@ CLOUD_PLANNER_IDS = {
 }
 JOBS: dict[str, dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
+# Verhalen die door een externe app (zoals BookReader) zijn aangeleverd; de UI haalt ze
+# op via /?handoff=<id>. In-memory: een handoff hoeft een herstart niet te overleven.
+STORY_HANDOFFS: dict[str, dict[str, Any]] = {}
+STORY_HANDOFFS_LOCK = threading.Lock()
+STORY_HANDOFF_LIMIT = 10
 COMFY_PROCESS: subprocess.Popen[str] | None = None
 FRAME_CACHE_DIR = Path(os.environ.get("DREAMWEAVER_FRAME_CACHE", "/tmp/dreamweaver-comfy-frames"))
 VIDEO_FRAME_LIMIT = 48
@@ -79,6 +99,8 @@ PROVIDER_CATALOG: list[dict[str, str]] = [
     {"id": "anthropic", "label": "Anthropic (Claude)", "envVar": "ANTHROPIC_API_KEY", "hint": "sk-ant-...", "docs": "https://console.anthropic.com/settings/keys"},
     {"id": "google", "label": "Google Gemini", "envVar": "GEMINI_API_KEY", "hint": "AIza...", "docs": "https://aistudio.google.com/app/apikey"},
     {"id": "xai", "label": "xAI Grok", "envVar": "XAI_API_KEY", "hint": "xai-...", "docs": "https://console.x.ai/"},
+    {"id": "modelslab", "label": "Modelslab", "envVar": "MODELSLAB_API_KEY", "hint": "Modelslab API-key", "docs": "https://modelslab.com/dashboard/api-keys"},
+    {"id": "atlas", "label": "Atlas Cloud", "envVar": "ATLAS_API_KEY", "hint": "apikey-...", "docs": "https://www.atlascloud.ai/"},
     {"id": "replicate", "label": "Replicate", "envVar": "REPLICATE_API_TOKEN", "hint": "r8_...", "docs": "https://replicate.com/account/api-tokens"},
 ]
 PROVIDER_BY_ID = {provider["id"]: provider for provider in PROVIDER_CATALOG}
@@ -2653,6 +2675,245 @@ def xai_generate_image(
     }
 
 
+def modelslab_api_url(path: str) -> str:
+    return f"{MODELSLAB_API_BASE_URL}/{path.lstrip('/')}"
+
+
+def modelslab_dimensions(width: int, height: int) -> tuple[int, int]:
+    width = max(256, min(2048, int(width or 512)))
+    height = max(256, min(2048, int(height or 512)))
+    scale = min(1.0, 1024 / max(width, height))
+    width = max(256, int((width * scale) // 8) * 8)
+    height = max(256, int((height * scale) // 8) * 8)
+    return min(width, 1024), min(height, 1024)
+
+
+def modelslab_error(body: dict[str, Any]) -> str:
+    for key in ("message", "messege", "error", "tip"):
+        value = body.get(key)
+        if value:
+            return trim_text(str(value), 500)
+    return "Modelslab gaf een fout terug."
+
+
+def modelslab_wait_for_result(key: str, request_id: Any, timeout: float = MODELSLAB_IMAGE_TIMEOUT) -> dict[str, Any]:
+    if request_id in (None, ""):
+        raise RuntimeError("Modelslab zette de aanvraag in verwerking, maar gaf geen request-id terug.")
+    deadline = time.monotonic() + timeout
+    fetch_url = modelslab_api_url(f"/images/fetch/{urllib.parse.quote(str(request_id))}")
+    while time.monotonic() < deadline:
+        remaining = max(1.0, deadline - time.monotonic())
+        time.sleep(min(8.0, max(2.0, remaining / 12)))
+        body = _http_json(fetch_url, {"key": key}, {}, min(60.0, remaining))
+        status = str(body.get("status") or "").lower()
+        if status == "success":
+            return body
+        if status == "error":
+            raise RuntimeError(modelslab_error(body))
+    raise RuntimeError("Modelslab renderen duurde te lang.")
+
+
+def modelslab_output_candidates(body: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    output = body.get("output")
+    if isinstance(output, list):
+        candidates.extend(str(item) for item in output if item)
+    proxy_links = body.get("proxy_links")
+    if isinstance(proxy_links, dict):
+        candidates.extend(str(item) for item in proxy_links.values() if item)
+    elif isinstance(proxy_links, list):
+        candidates.extend(str(item) for item in proxy_links if item)
+    return candidates
+
+
+def modelslab_image_content(body: dict[str, Any], timeout: float = MODELSLAB_IMAGE_TIMEOUT) -> tuple[bytes, str]:
+    for candidate in modelslab_output_candidates(body):
+        if candidate.startswith("http://") or candidate.startswith("https://"):
+            return _http_binary(candidate, timeout=min(120.0, timeout))
+        if candidate.startswith("data:") or len(candidate) > 200:
+            return decode_image_b64(candidate)
+    raise RuntimeError("Modelslab gaf geen bruikbare image-output terug.")
+
+
+def modelslab_generate_image(
+    key: str,
+    model_id: str,
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    steps: int,
+    guidance_scale: float,
+    seed: int,
+    timeout: float = MODELSLAB_IMAGE_TIMEOUT,
+) -> dict[str, Any]:
+    render_width, render_height = modelslab_dimensions(width, height)
+    body = _http_json(
+        modelslab_api_url("/images/text2img"),
+        {
+            "key": key,
+            "model_id": model_id or DEFAULT_MODELSLAB_IMAGE_MODEL,
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "width": render_width,
+            "height": render_height,
+            "samples": 1,
+            "num_inference_steps": steps,
+            "guidance_scale": guidance_scale,
+            "seed": seed,
+            "safety_checker": "yes",
+            "base64": False,
+            "temp": False,
+            "webhook": None,
+            "track_id": None,
+        },
+        {},
+        min(90.0, timeout),
+    )
+    status = str(body.get("status") or "").lower()
+    if status == "processing":
+        body = modelslab_wait_for_result(key, body.get("id"), timeout=timeout)
+        status = str(body.get("status") or "").lower()
+    if status != "success":
+        raise RuntimeError(modelslab_error(body))
+    content, mime_type = modelslab_image_content(body, timeout=timeout)
+    return {
+        "content": content,
+        "mimeType": mime_type,
+        "id": body.get("id"),
+        "meta": body.get("meta") if isinstance(body.get("meta"), dict) else {},
+        "width": render_width,
+        "height": render_height,
+    }
+
+
+def atlas_request_json(
+    path: str,
+    key: str,
+    payload: dict[str, Any] | None = None,
+    method: str = "GET",
+    timeout: float = 120,
+) -> dict[str, Any]:
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(f"{ATLAS_API_BASE_URL}{path}", data=body, method=method)
+    req.add_header("Authorization", f"Bearer {key}")
+    req.add_header("User-Agent", ATLAS_USER_AGENT)
+    if payload is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            raw = response.read().decode("utf-8") or "{}"
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        message = detail[:500]
+        try:
+            parsed = json.loads(detail)
+            if isinstance(parsed, dict):
+                err = parsed.get("error")
+                if isinstance(err, dict):
+                    message = str(err.get("message") or err.get("code") or message)
+                else:
+                    message = str(parsed.get("message") or parsed.get("msg") or parsed.get("detail") or err or message)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        if "error code: 10" in detail.lower() or "<html" in detail.lower():
+            message = (
+                "Atlas' CDN (Cloudflare) blokkeerde de aanvraag; dit is botbescherming, "
+                "geen API-key- of tegoedprobleem. Probeer het opnieuw."
+            )
+        raise RuntimeError(f"Atlas API-fout {exc.code}: {message}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Atlas API is niet bereikbaar: {exc.reason}") from exc
+    return json.loads(raw)
+
+
+def atlas_body(data: dict[str, Any]) -> dict[str, Any]:
+    nested = data.get("data")
+    return nested if isinstance(nested, dict) else data
+
+
+def atlas_extract_outputs(data: dict[str, Any]) -> list[str]:
+    body = atlas_body(data)
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        if isinstance(value, dict):
+            for key in ("url", "output", "image", "image_url", "src"):
+                if value.get(key):
+                    add(value.get(key))
+            return
+        candidate = str(value or "").strip()
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            urls.append(candidate)
+
+    outputs = body.get("outputs") or body.get("output") or body.get("urls") or body.get("url")
+    if isinstance(outputs, list):
+        for item in outputs:
+            add(item)
+    elif isinstance(outputs, dict):
+        for item in outputs.values():
+            add(item)
+    else:
+        add(outputs)
+    return urls
+
+
+def atlas_wait_for_result(key: str, request_id: str, timeout: float = ATLAS_IMAGE_TIMEOUT) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    use_result_endpoint = False
+    while time.monotonic() < deadline:
+        path = "/model/result/" if use_result_endpoint else "/model/prediction/"
+        try:
+            data = atlas_request_json(f"{path}{urllib.parse.quote(request_id)}", key, timeout=120)
+        except RuntimeError as exc:
+            if "404" in str(exc) and not use_result_endpoint:
+                use_result_endpoint = True
+                continue
+            raise
+        body = atlas_body(data)
+        status = str(body.get("status") or "").lower()
+        if status in {"completed", "succeeded", "success", "done"} or (not status and atlas_extract_outputs(data)):
+            if atlas_extract_outputs(data):
+                return data
+            raise RuntimeError("Atlas rondde de aanvraag af zonder output-URL.")
+        if status in {"failed", "failure", "error", "cancelled", "canceled"}:
+            raise RuntimeError(str(body.get("error") or body.get("message") or f"Atlas-aanvraag: {status}."))
+        time.sleep(2.0)
+    raise RuntimeError("Atlas renderen duurde te lang.")
+
+
+def atlas_generate_image(
+    key: str,
+    model_id: str,
+    prompt: str,
+    timeout: float = ATLAS_IMAGE_TIMEOUT,
+) -> dict[str, Any]:
+    started = atlas_request_json(
+        "/model/generateImage",
+        key,
+        {"model": model_id or DEFAULT_ATLAS_IMAGE_MODEL, "prompt": prompt},
+        method="POST",
+        timeout=120,
+    )
+    body = atlas_body(started)
+    request_id = str(body.get("id") or body.get("request_id") or body.get("prediction_id") or "").strip()
+    if not request_id:
+        raise RuntimeError("Atlas gaf geen prediction-id terug.")
+    result = atlas_wait_for_result(key, request_id, timeout=timeout)
+    for remote in atlas_extract_outputs(result):
+        if remote.startswith("data:") and "," in remote:
+            content, mime_type = decode_image_b64(remote)
+            return {"content": content, "mimeType": mime_type, "id": request_id}
+        if remote.startswith(("http://", "https://")):
+            content, mime_type = _http_binary(
+                remote, headers={"User-Agent": ATLAS_USER_AGENT}, timeout=min(120.0, timeout)
+            )
+            return {"content": content, "mimeType": mime_type, "id": request_id}
+    raise RuntimeError("Atlas gaf geen bruikbare image-output terug.")
+
+
 def planner_generate_json(
     engine: dict[str, Any],
     system_prompt: str,
@@ -2677,20 +2938,37 @@ def planner_generate_json(
     raise RuntimeError(f"Onbekende planner-provider: {engine_type}")
 
 
+ENTITY_CHARACTER_TYPES = {"person", "animal", "sentient_being"}
+ENTITY_FIGURATIVE_TYPES = {"concept", "voice_or_thought", "metaphor", "emotion", "personification"}
+
+
 def llm_story_chunk_analysis(engine: dict[str, Any], chunk: dict[str, Any], known_names: list[str]) -> dict[str, Any]:
     system_prompt = (
         "You are a strict comic-book story planner. Return valid JSON only. "
-        "As a character, list ONLY real persons, animals or named sentient beings that speak, act or are referred to with he/she/they pronouns in this text. "
-        "Use the actual proper name of the character. NEVER output a pronoun (they, you, me, he, she, we, i, it, jij, jou etc.) as a 'name'. "
-        "Be conservative about objects, places, brands and concepts, but when a capitalized name clearly performs actions, speaks, or has agency, include it as a character (real people can have place-like or unusual names). "
-        "Reject obvious non-persons: brand names like Muzak when used as music/system, pure place descriptions without person agency. "
-        "If the text uses only pronouns for someone, try to resolve to a proper name from context or omit. Prefer including clearly named individuals over omitting. Use short, concrete visual facts and never invent new plot."
+        "STEP 1 - ENTITY CLASSIFICATION: classify EVERY named or recurring entity with an explicit entityType: "
+        "'person' (real human who acts, speaks or is referred to with he/she/they), "
+        "'animal' (real animal present in the story world), "
+        "'sentient_being' (robot, ghost, named creature with agency), "
+        "'place' (location, building, town), 'object' (physical thing), 'organization' (company, group, brand), "
+        "'voice_or_thought' (a voice, thought, memory or dream mentioned but not a physical being), "
+        "'metaphor' (figure of speech, personified emotion or symbolic image - NOT physically present). "
+        "Only entityType person/animal/sentient_being can be a character. "
+        "NEVER output a pronoun (they, you, me, he, she, we, i, it, jij, jou etc.) as a name. "
+        "A capitalized name that clearly performs actions or speaks is a character even if it sounds like a place or brand; "
+        "a brand/system (like Muzak as background music) or pure place description is NOT a character. "
+        "STEP 2 - LITERAL VS FIGURATIVE: list every phrase that is figurative, symbolic, hypothetical, remembered or "
+        "internal (thoughts, feelings, dreams, comparisons with 'as if/like') under 'figurative', with what a naive "
+        "illustrator might wrongly draw. Events must contain ONLY things that literally, physically happen on screen. "
+        "Use short, concrete visual facts and never invent new plot."
     )
     schema_hint = {
         "summary": "short summary of this passage",
-        "characters": [
+        "entities": [
             {
-                "name": "exact proper name only; use 'Narrator' only for a first-person narrator who is physically visible/acting; avoid pronouns, brands, places, objects, concepts and symbolic voices/shadows",
+                "name": "exact proper name; use 'Narrator' only for a first-person narrator who is physically visible/acting",
+                "entityType": "person|animal|sentient_being|place|object|organization|voice_or_thought|metaphor",
+                "isCharacter": "true only for person/animal/sentient_being that acts on screen",
+                "confidence": "0.0-1.0",
                 "aliases": ["optional"],
                 "gender": "female|male|nonbinary|unknown",
                 "visualClues": "only if the text gives evidence",
@@ -2698,11 +2976,17 @@ def llm_story_chunk_analysis(engine: dict[str, Any], chunk: dict[str, Any], know
                 "evidence": ["short text snippet"],
             }
         ],
-        "locations": [{"name": "place", "evidence": "text evidence"}],
-        "objects": [{"name": "important object", "evidence": "text evidence"}],
+        "figurative": [
+            {
+                "phrase": "the figurative/inner phrase from the text",
+                "meaning": "what it really means",
+                "mustNotDraw": "what a naive illustrator might wrongly draw literally",
+            }
+        ],
         "events": [
             {
-                "summary": "visible event",
+                "summary": "one concrete, literally visible physical event (who does what, where)",
+                "literal": "true if it physically happens on screen; false for memories, dreams, hypotheticals",
                 "visibleCharacters": ["names that truly belong on screen"],
                 "absentCharacters": ["names explicitly gone/not visible"],
                 "location": "place",
@@ -2728,14 +3012,50 @@ def merge_llm_chunk_analysis(rule_analysis: dict[str, Any], llm_analysis: dict[s
         merged["summary"] = trim_text(summary, 520)
 
     character_candidates = list(merged.get("characterCandidates") or [])
-    for item in safe_list(llm_analysis.get("characters") or llm_analysis.get("characterCandidates")):
-        name = sanitize_character_candidate_name(text_field(item, ["name", "naam"]), chunk_text,
+    llm_locations: list[dict[str, Any]] = [item for item in safe_list(llm_analysis.get("locations")) if isinstance(item, dict)]
+    llm_objects: list[dict[str, Any]] = [item for item in safe_list(llm_analysis.get("objects")) if isinstance(item, dict)]
+    figurative_elements = list(merged.get("figurativeElements") or [])
+    # Nieuw formaat: één 'entities'-lijst met expliciet entityType; oud formaat: 'characters'.
+    entity_items = safe_list(llm_analysis.get("entities"))
+    legacy_items = safe_list(llm_analysis.get("characters") or llm_analysis.get("characterCandidates"))
+    for item in [*entity_items, *legacy_items]:
+        if not isinstance(item, dict):
+            continue
+        entity_type = trim_text(text_field(item, ["entityType", "type"]), 40).strip().lower().replace("-", "_").replace(" ", "_")
+        is_character_flag = item.get("isCharacter")
+        if isinstance(is_character_flag, str):
+            is_character_flag = is_character_flag.strip().lower() in {"true", "yes", "ja", "1"}
+        confidence = bounded_float(item.get("confidence"), 1.0, 0.0, 1.0)
+        raw_name = text_field(item, ["name", "naam"])
+        if entity_type == "place":
+            llm_locations.append({"name": raw_name, "evidence": text_field(item, ["evidence", "role", "rol"])})
+            continue
+        if entity_type in {"object", "organization"}:
+            llm_objects.append({"name": raw_name, "evidence": text_field(item, ["evidence", "role", "rol"])})
+            continue
+        if entity_type in ENTITY_FIGURATIVE_TYPES:
+            phrase = trim_text(raw_name, 120)
+            if phrase:
+                figurative_elements.append(
+                    {
+                        "phrase": phrase,
+                        "meaning": trim_text(text_field(item, ["role", "rol", "meaning"]), 160),
+                        "mustNotDraw": trim_text(f"{phrase} as a person, figure or creature", 160),
+                        "source": "ollama",
+                    }
+                )
+            continue
+        if entity_type and entity_type not in ENTITY_CHARACTER_TYPES:
+            continue
+        if is_character_flag is False or confidence < 0.4:
+            continue
+        name = sanitize_character_candidate_name(raw_name, chunk_text,
                                                  precomputed_action_pos=precomputed_action_pos,
                                                  precomputed_neg_pos=precomputed_neg_pos)
         if not name:
             continue
-        evidence = safe_list(item.get("evidence") if isinstance(item, dict) else None)
-        aliases = safe_list(item.get("aliases") if isinstance(item, dict) else None)
+        evidence = safe_list(item.get("evidence"))
+        aliases = safe_list(item.get("aliases"))
         character_candidates.append(
             {
                 "name": name,
@@ -2744,15 +3064,16 @@ def merge_llm_chunk_analysis(rule_analysis: dict[str, Any], llm_analysis: dict[s
                 "gender": normalize_gender(text_field(item, ["gender", "geslacht"])),
                 "visualClues": trim_text(text_field(item, ["visualClues", "appearance", "uiterlijk"]), 180),
                 "role": trim_text(text_field(item, ["role", "rol"]), 90),
+                "entityType": entity_type or "person",
                 "evidence": [trim_text(str(part), 180) for part in evidence if isinstance(part, str)][:3],
                 "source": "ollama",
             }
         )
     merged["characterCandidates"] = character_candidates
 
-    for key, output_key in [("locations", "locations"), ("objects", "objects")]:
+    for source_items, output_key in [(llm_locations, "locations"), (llm_objects, "objects")]:
         items = list(merged.get(output_key) or [])
-        for item in safe_list(llm_analysis.get(key)):
+        for item in source_items:
             name = trim_text(text_field(item, ["name", "naam"]), 80).strip(" .,:;!?\"'“”").lower()
             if not name or len(name.split()) > 6:
                 continue
@@ -2762,14 +3083,47 @@ def merge_llm_chunk_analysis(rule_analysis: dict[str, Any], llm_analysis: dict[s
             items.append({"name": name, "mentions": 1, "evidence": evidence, "source": "ollama"})
         merged[output_key] = items
 
+    for item in safe_list(llm_analysis.get("figurative")):
+        if not isinstance(item, dict):
+            continue
+        phrase = trim_text(text_field(item, ["phrase", "zin", "frase"]), 120)
+        if not phrase:
+            continue
+        figurative_elements.append(
+            {
+                "phrase": phrase,
+                "meaning": trim_text(text_field(item, ["meaning", "betekenis"]), 160),
+                "mustNotDraw": trim_text(text_field(item, ["mustNotDraw", "nietTekenen"]), 160),
+                "source": "ollama",
+            }
+        )
+    merged["figurativeElements"] = figurative_elements[:20]
+
     events = list(merged.get("events") or [])
     for item in safe_list(llm_analysis.get("events")):
         summary = trim_text(text_field(item, ["summary", "samenvatting"]), 220)
         if word_count(summary) < 3:
             continue
+        literal_flag = item.get("literal") if isinstance(item, dict) else None
+        if isinstance(literal_flag, str):
+            literal_flag = literal_flag.strip().lower() not in {"false", "no", "nee", "0"}
+        if literal_flag is False:
+            # Niet-letterlijke gebeurtenissen (herinnering, droom, hypothese) horen niet op een panel;
+            # bewaar ze als figuratief element zodat de negatieve prompt ze kan uitsluiten.
+            figurative_elements.append(
+                {
+                    "phrase": summary,
+                    "meaning": "memory, dream or hypothetical - not physically happening",
+                    "mustNotDraw": trim_text(f"{summary} shown as a real on-screen event", 160),
+                    "source": "ollama",
+                }
+            )
+            merged["figurativeElements"] = figurative_elements[:20]
+            continue
         events.append(
             {
                 "summary": summary,
+                "literal": True,
                 "characterNames": [str(name) for name in safe_list(item.get("visibleCharacters") if isinstance(item, dict) else None) if isinstance(name, str)][:8],
                 "absentCharacterNames": [str(name) for name in safe_list(item.get("absentCharacters") if isinstance(item, dict) else None) if isinstance(name, str)][:8],
                 "location": trim_text(text_field(item, ["location", "plek"]), 80),
@@ -3150,9 +3504,22 @@ def build_world_bible(chunk_analyses: list[dict[str, Any]]) -> dict[str, Any]:
         }
         for analysis in chunk_analyses
     ]
+    figurative: list[dict[str, Any]] = []
+    seen_phrases: set[str] = set()
+    for analysis in chunk_analyses:
+        for item in safe_list(analysis.get("figurativeElements")):
+            if not isinstance(item, dict):
+                continue
+            phrase = str(item.get("phrase") or "").strip()
+            key = phrase.lower()
+            if not phrase or key in seen_phrases:
+                continue
+            seen_phrases.add(key)
+            figurative.append(item)
     return {
         "locations": merge_named_elements(chunk_analyses, "locations", "loc"),
         "objects": merge_named_elements(chunk_analyses, "objects", "obj"),
+        "figurative": figurative[:30],
         "relationships": [],
         "chunkSummaries": summaries,
     }
@@ -3571,6 +3938,7 @@ def build_panel_negative_prompt(
     characters: list[dict[str, Any]],
     present_ids: list[str] | None = None,
     negative_guidance: str = "",
+    figurative_phrases: list[str] | None = None,
 ) -> str:
     # Keep all negations here; diffusion models follow "do not" cues poorly in the positive prompt.
     parts = [COMIC_NEGATIVE_PROMPT]
@@ -3583,8 +3951,12 @@ def build_panel_negative_prompt(
     # Always reinforce: only the listed cast (when present_ids provided)
     if present_ids:
         parts.append("any human or character not explicitly listed in the positive prompt")
+    figurative_phrases = [phrase.strip() for phrase in (figurative_phrases or []) if str(phrase).strip()]
+    if figurative_phrases:
+        parts.append(f"do not draw figurative phrases literally: {trim_text('; '.join(figurative_phrases[:6]), 320)}")
     if negative_guidance.strip():
         parts.append(f"user-forbidden elements and literalizations: {trim_text(negative_guidance, 420)}")
+    if negative_guidance.strip() or figurative_phrases:
         parts.append(
             "literalized metaphor, personified emotion, symbolic extra figure, visualized thought as person, "
             "visualized voice as person, unwanted silent character, extra witness, invented bystander"
@@ -3600,20 +3972,29 @@ def llm_panel_visual_prompt(
     absent_names: list[str],
     story_context: str = "",
     timeout: float = OLLAMA_PANEL_PROMPT_TIMEOUT,
-) -> str:
+) -> dict[str, Any]:
     system_prompt = (
-        "You turn one comic-book story beat into a single compact English image description "
-        "for a text-to-image model. Describe ONLY what is literally visible in this beat. "
+        "You turn one comic-book story beat into a compact English image description "
+        "for a text-to-image model. Work in two steps and return JSON only. "
+        "STEP 1 - SPLIT LITERAL FROM FIGURATIVE: from the beat, list under 'literalActions' each concrete, "
+        "physically visible action as subject-verb-object (who does what, with what, where); list under 'figurative' "
+        "every phrase that is dialogue content, inner thought, feeling, memory, dream, comparison ('as if/like') or "
+        "metaphor - these must NEVER be drawn. "
+        "STEP 2 - COMPOSE: write 'visual' as one English sentence built ONLY from the literalActions. "
         "Use the story context and scene summary ONLY to resolve pronouns and ambiguity; "
         "never copy events from them into this panel. "
         "CRITICAL CAST FIDELITY: describe ONLY characters from the allowed visible list if any; never invent, name or describe any extra people, faces, silhouettes, figures, crowds or animals. "
         "If the visible list is empty, the scene MUST contain zero humans or animals. "
         "Never add characters, objects, places or actions that are not in this beat. "
-        "No dialogue, no narration, no story explanation, no quotation marks. Return JSON only."
+        "No dialogue, no narration, no story explanation, no quotation marks."
     )
     cast_line = ", ".join(visible_names) if visible_names else "no people, empty scene"
     absent_line = ", ".join(absent_names) if absent_names else "none"
-    schema_hint = {"visual": "one English sentence describing the visible scene, 12-40 words"}
+    schema_hint = {
+        "literalActions": ["short subject-verb-object action that is physically visible"],
+        "figurative": ["phrase from the beat that is figurative/inner and must not be drawn"],
+        "visual": "one English sentence describing the visible scene, 12-40 words",
+    }
     context_lines = ""
     if story_context.strip():
         context_lines += f"Story context (do NOT draw this, only for disambiguation): {trim_text(story_context, 500)}\n"
@@ -3629,8 +4010,15 @@ def llm_panel_visual_prompt(
         f"Story beat (draw ONLY this; obey visible cast strictly):\n{trim_text(beat_text, 600)}"
     )
     result = planner_generate_json(engine, system_prompt, user_prompt, timeout)
-    visual = text_field(result, ["visual", "description", "prompt"])
-    return trim_text(visual, 420)
+    return {
+        "visual": trim_text(text_field(result, ["visual", "description", "prompt"]), 420),
+        "literalActions": [
+            trim_text(str(item), 120) for item in safe_list(result.get("literalActions")) if str(item).strip()
+        ][:8],
+        "figurative": [
+            trim_text(str(item), 120) for item in safe_list(result.get("figurative")) if str(item).strip()
+        ][:8],
+    }
 
 
 FIGURATIVE_VISUAL_WORDS = {
@@ -3714,27 +4102,39 @@ def grounded_panel_text(
     visible_names: list[str],
     absent_names: list[str],
     story_context: str = "",
-) -> str:
+) -> dict[str, Any]:
     # When the LLM planner is active, distil the raw beat into a tight, visual-only prompt.
     # Any failure or sign of hallucination falls back to a local visual-only cleanup, never the raw beat.
-    local_fallback = local_visible_beat_text(beat_text, scene, visible_names)
+    # Returns the visual sentence plus the literal/figurative split for auditing and negative prompts.
+    local_fallback = {
+        "visual": local_visible_beat_text(beat_text, scene, visible_names),
+        "literalActions": [],
+        "figurative": [],
+        "source": "local_rules",
+    }
     if engine.get("type") not in LLM_ENGINE_TYPES:
         return local_fallback
     try:
-        visual = llm_panel_visual_prompt(
+        grounded = llm_panel_visual_prompt(
             engine, beat_text, scene, visible_names, absent_names, story_context
         )
     except Exception:  # noqa: BLE001
         return local_fallback
+    # De figuratieve lijst blijft ook bij een afgekeurde 'visual' bruikbaar: die voedt alleen
+    # de negatieve prompt en kan geen nieuwe elementen aan het beeld toevoegen.
+    rejected = dict(local_fallback)
+    rejected["figurative"] = list(grounded.get("figurative") or [])
+    rejected["source"] = "local_rules_after_llm_reject"
+    visual = str(grounded.get("visual") or "")
     if word_count(visual) < 3:
-        return local_fallback
+        return rejected
     lowered = visual.lower()
     if has_figurative_visual_cue(lowered):
-        return local_fallback
+        return rejected
     for name in absent_names:
         first = name.split()[0].lower() if name.split() else ""
         if first and re.search(rf"\b{re.escape(first)}\b", lowered):
-            return local_fallback
+            return rejected
     # Fidelity gate: if the grounded visual introduces any new capitalized "person-like" name not in visible cast, reject (prevents hallucinations of extra characters)
     vis_firsts = {n.split()[0].lower() for n in visible_names if n}
     vis_full_lower = {n.lower() for n in visible_names}
@@ -3746,8 +4146,80 @@ def grounded_panel_text(
             continue
         if cand_l not in vis_full_lower and first not in vis_firsts and first not in {"narrator", "protagonist"}:
             # unknown name introduced -> unsafe, fall back
-            return local_fallback
-    return visual
+            return rejected
+    grounded["source"] = "llm"
+    return grounded
+
+
+def llm_scene_beat_plan(
+    engine: dict[str, Any],
+    scene_sentences: list[str],
+    target_panels: int,
+    timeout: float = OLLAMA_PANEL_PROMPT_TIMEOUT,
+) -> list[list[int]]:
+    numbered = "\n".join(f"{index}. {sentence}" for index, sentence in enumerate(scene_sentences, start=1))
+    system_prompt = (
+        "You split one comic-book scene into panel beats. Return valid JSON only. "
+        "Group the numbered sentences into consecutive groups, one group per panel, in reading order. "
+        "Cut ONLY at event boundaries: a new visible action starts, a character enters or leaves, "
+        "the location or time shifts, or an object changes hands. Never cut in the middle of one "
+        "continuous action. Sentences that contain only inner thoughts or figurative language belong "
+        "with the visible action around them, never in their own panel. "
+        "Use every sentence number exactly once and keep the original order."
+    )
+    schema_hint = {"panels": [{"sentences": [1, 2]}, {"sentences": [3]}]}
+    user_prompt = (
+        f"Target: about {target_panels} panels (minimum {max(1, target_panels - 1)}, maximum {min(6, target_panels + 1)}).\n"
+        f"JSON schema example: {json.dumps(schema_hint)}\n\n"
+        f"Scene sentences:\n{numbered}"
+    )
+    result = planner_generate_json(engine, system_prompt, user_prompt, timeout)
+    groups: list[list[int]] = []
+    for item in safe_list(result.get("panels")):
+        if isinstance(item, dict):
+            numbers = safe_list(item.get("sentences"))
+        elif isinstance(item, list):
+            numbers = item
+        else:
+            continue
+        indices: list[int] = []
+        for number in numbers:
+            try:
+                indices.append(int(number))
+            except (TypeError, ValueError):
+                continue
+        if indices:
+            groups.append(indices)
+    return groups
+
+
+def event_aligned_beats(
+    engine: dict[str, Any],
+    scene_sentences: list[str],
+    target_panels: int,
+) -> list[list[str]]:
+    # Panels volgen gebeurtenisgrenzen (LLM-plan) in plaats van louter woordaantal;
+    # elk ongeldig plan valt geruisloos terug op de gelijkmatige verdeling.
+    if engine.get("type") not in LLM_ENGINE_TYPES or len(scene_sentences) < 2:
+        return split_evenly(scene_sentences, target_panels)
+    try:
+        groups = llm_scene_beat_plan(engine, scene_sentences, target_panels)
+    except Exception:  # noqa: BLE001
+        return split_evenly(scene_sentences, target_panels)
+    expected = 1
+    beats: list[list[str]] = []
+    for group in groups:
+        if not group or group[0] != expected or group != list(range(group[0], group[-1] + 1)):
+            return split_evenly(scene_sentences, target_panels)
+        if group[-1] > len(scene_sentences):
+            return split_evenly(scene_sentences, target_panels)
+        expected = group[-1] + 1
+        beats.append([scene_sentences[index - 1] for index in group])
+    if expected != len(scene_sentences) + 1 or not beats:
+        return split_evenly(scene_sentences, target_panels)
+    if not (max(1, target_panels - 1) <= len(beats) <= min(6, target_panels + 1)):
+        return split_evenly(scene_sentences, target_panels)
+    return beats
 
 
 def build_panel_prompt(
@@ -4346,6 +4818,17 @@ def build_comic_plan(
     filter_relationships_for_characters(world, characters)
     if user_guidance:
         world["userGuidance"] = user_guidance
+    # Automatisch gedetecteerde figuurlijke taal wordt als "niet letterlijk tekenen"-regel
+    # aan elke panel-negatieveprompt toegevoegd, naast wat de gebruiker zelf opgaf.
+    figurative_notes = [
+        trim_text(str(item.get("mustNotDraw") or item.get("phrase") or ""), 120)
+        for item in safe_list(world.get("figurative"))
+        if isinstance(item, dict)
+    ]
+    figurative_notes = [note for note in figurative_notes if note.strip()]
+    if figurative_notes:
+        figurative_line = "; ".join(figurative_notes[:12])
+        negative_guidance = f"{negative_guidance}; {figurative_line}" if negative_guidance.strip() else figurative_line
     if job_id and engine.get("type") == "ollama":
         job_update(job_id, status="analyzing_story", analysisStage="synthesis")
     global_summary = build_global_story_summary(engine, list(analysis.get("chunks") or []))
@@ -4358,6 +4841,10 @@ def build_comic_plan(
     notes = list(analysis.get("notes") or [])
     if user_guidance:
         notes.append("Gebruikersbriefing toegepast op cast, metaforen en continuity prompts.")
+    if figurative_notes:
+        notes.append(
+            f"{len(figurative_notes)} figuurlijke element(en) gedetecteerd en uitgesloten van letterlijke weergave."
+        )
 
     scenes: list[dict[str, Any]] = []
     panels: list[dict[str, Any]] = []
@@ -4383,7 +4870,7 @@ def build_comic_plan(
             "exitingCharacterIds": list(scene_cast["exiting"]),
         }
         scene_panels = estimate_panel_count(scene_text, scene_sentences)
-        beats = split_evenly(scene_sentences, scene_panels)
+        beats = event_aligned_beats(engine, scene_sentences, scene_panels)
         cast_plan = panel_casts_for_scene(beats, list(scene["characterIds"]), characters)
         scene_panel_ids = []
         for beat_index, beat_sentences in enumerate(beats, start=1):
@@ -4409,7 +4896,9 @@ def build_comic_plan(
                 character_states,
             )
             story_context = panel_story_context(global_summary, world, present, absent, continuity)
-            action_text = grounded_panel_text(engine, beat_text, scene, visible_names, absent_names, story_context)
+            grounded = grounded_panel_text(engine, beat_text, scene, visible_names, absent_names, story_context)
+            action_text = str(grounded.get("visual") or "")
+            panel_figurative = [str(item) for item in safe_list(grounded.get("figurative")) if str(item).strip()]
             panel = {
                 "id": f"panel_{panel_number:04d}",
                 "panelNumber": panel_number,
@@ -4417,6 +4906,11 @@ def build_comic_plan(
                 "beatNumber": beat_index,
                 "caption": trim_text(beat_text, 190),
                 "visualDescription": action_text if action_text != beat_text else "",
+                "literalCheck": {
+                    "source": str(grounded.get("source") or ""),
+                    "literalActions": [str(item) for item in safe_list(grounded.get("literalActions"))],
+                    "figurative": panel_figurative,
+                },
                 "dialogue": extract_dialogue(beat_text, characters),
                 "continuity": continuity,
                 "shot": SHOT_SEQUENCE[(panel_number - 1) % len(SHOT_SEQUENCE)],
@@ -4435,7 +4929,7 @@ def build_comic_plan(
                     continuity,
                     user_guidance,
                 ),
-                "negativePrompt": build_panel_negative_prompt(absent, characters, present, negative_guidance),
+                "negativePrompt": build_panel_negative_prompt(absent, characters, present, negative_guidance, panel_figurative),
             }
             panels.append(panel)
             scene_panel_ids.append(panel["id"])
@@ -4690,6 +5184,92 @@ def api_planner_choices() -> list[dict[str, Any]]:
 
 def cloud_model_choices() -> list[dict[str, Any]]:
     return local_planner_choices() + api_planner_choices()
+
+
+def modelslab_model_entries() -> list[tuple[str, str]]:
+    raw_items = [DEFAULT_MODELSLAB_IMAGE_MODEL, "sdxl"]
+    raw_items.extend(item.strip() for item in EXTRA_MODELSLAB_IMAGE_MODELS.split(",") if item.strip())
+    entries: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    known_labels = {
+        "flux": "Flux",
+        "sdxl": "SDXL",
+    }
+    for raw_item in raw_items:
+        if "|" in raw_item:
+            model_id, label = raw_item.split("|", 1)
+        elif "=" in raw_item:
+            model_id, label = raw_item.split("=", 1)
+        else:
+            model_id, label = raw_item, known_labels.get(raw_item.lower(), raw_item)
+        model_id = model_id.strip()
+        label = label.strip() or model_id
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        entries.append((model_id, label))
+    return entries
+
+
+def atlas_model_entries() -> list[tuple[str, str]]:
+    raw_items = [DEFAULT_ATLAS_IMAGE_MODEL]
+    raw_items.extend(item.strip() for item in EXTRA_ATLAS_IMAGE_MODELS.split(",") if item.strip())
+    entries: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    known_labels = {
+        "seedream-3.0": "SeedDream 3.0",
+        "bytedance/seedream-v4.5": "SeedDream 4.5",
+    }
+    for raw_item in raw_items:
+        if "|" in raw_item:
+            model_id, label = raw_item.split("|", 1)
+        elif "=" in raw_item:
+            model_id, label = raw_item.split("=", 1)
+        else:
+            model_id, label = raw_item, known_labels.get(raw_item.lower(), raw_item)
+        model_id = model_id.strip()
+        label = label.strip() or model_id
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        entries.append((model_id, label))
+    return entries
+
+
+def cloud_panel_model_choices() -> list[dict[str, Any]]:
+    modelslab_configured = bool(get_provider_key("modelslab"))
+    choices: list[dict[str, Any]] = [
+        {
+            "id": f"modelslab:{model_id}",
+            "label": f"Modelslab {label} ({model_id})",
+            "provider": "modelslab",
+            "kind": "modelslab_text2img",
+            "supported": True,
+            "configured": modelslab_configured,
+            "modelId": model_id,
+            "description": "Cloud-renderer via Modelslab text2img; panelprompt en negatieve prompt worden verstuurd.",
+        }
+        for model_id, label in modelslab_model_entries()
+    ]
+    atlas_configured = bool(get_provider_key("atlas"))
+    choices.extend(
+        {
+            "id": f"atlas:{model_id}",
+            "label": f"Atlas {label} ({model_id})",
+            "provider": "atlas",
+            "kind": "atlas_text2img",
+            "supported": True,
+            "configured": atlas_configured,
+            "modelId": model_id,
+            "description": "Cloud-renderer via Atlas Cloud (zelfde dienst als in ImagineAI); de panelprompt wordt verstuurd.",
+        }
+        for model_id, label in atlas_model_entries()
+    )
+    return choices
+
+
+def panel_model_choices(inventory: dict[str, Any]) -> list[dict[str, Any]]:
+    return local_model_choices(inventory) + cloud_panel_model_choices()
 
 
 def local_model_choices(inventory: dict[str, Any]) -> list[dict[str, Any]]:
@@ -5115,7 +5695,7 @@ def extract_comfy_error(history_item: dict[str, Any]) -> Any:
 
 
 def select_comic_model(model_id: str, inventory: dict[str, Any]) -> dict[str, Any]:
-    choices = local_model_choices(inventory)
+    choices = panel_model_choices(inventory)
     by_id = {str(choice["id"]): choice for choice in choices}
     if model_id == "auto":
         for preferred in ["zimage_turbo"]:
@@ -5131,9 +5711,13 @@ def select_comic_model(model_id: str, inventory: dict[str, Any]) -> dict[str, An
                 return choice
     choice = by_id.get(model_id)
     if not choice:
-        raise RuntimeError(f"Lokaal model '{model_id}' is niet gevonden.")
+        raise RuntimeError(f"Rendermodel '{model_id}' is niet gevonden.")
     if not choice.get("supported"):
         raise RuntimeError(f"Voor '{choice.get('label')}' is nog geen ComfyUI workflow-adapter beschikbaar.")
+    if choice.get("provider") == "modelslab" and not get_provider_key("modelslab"):
+        raise RuntimeError("Koppel eerst een Modelslab API-key via Instellingen > API-keys.")
+    if choice.get("provider") == "atlas" and not get_provider_key("atlas"):
+        raise RuntimeError("Koppel eerst een Atlas Cloud API-key via Instellingen > API-keys.")
     return choice
 
 
@@ -5163,6 +5747,53 @@ def render_comic_panel(
     model_id = str(model_choice.get("id") or "auto")
     cast_ids = [str(char_id) for char_id in (panel.get("characterIds") or [])]
     panel_seed = (seed + cast_seed_offset(cast_ids)) % (2**63 - 1)
+
+    if kind == "modelslab_text2img":
+        key = get_provider_key("modelslab")
+        if not key:
+            raise RuntimeError("Koppel eerst een Modelslab API-key via Instellingen > API-keys.")
+        modelslab_model = str(model_choice.get("modelId") or model_id.removeprefix("modelslab:") or DEFAULT_MODELSLAB_IMAGE_MODEL)
+        result = modelslab_generate_image(
+            key=key,
+            model_id=modelslab_model,
+            prompt=prompt,
+            negative_prompt=negative,
+            width=width,
+            height=height,
+            steps=bounded_int(payload.get("steps"), 30, 1, 50),
+            guidance_scale=bounded_float(payload.get("cfg"), 7.5, 1.0, 20.0),
+            seed=panel_seed % (2**32 - 1),
+        )
+        return {
+            "imageUrl": save_dream_media(result["content"], result["mimeType"], f"modelslab_{panel['id']}"),
+            "promptId": f"modelslab:{result.get('id') or ''}",
+            "mediaType": "image",
+            "provider": "modelslab",
+            "model": modelslab_model,
+            "renderedWidth": result.get("width"),
+            "renderedHeight": result.get("height"),
+        }
+
+    if kind == "atlas_text2img":
+        key = get_provider_key("atlas")
+        if not key:
+            raise RuntimeError("Koppel eerst een Atlas Cloud API-key via Instellingen > API-keys.")
+        atlas_model = str(model_choice.get("modelId") or model_id.removeprefix("atlas:") or DEFAULT_ATLAS_IMAGE_MODEL)
+        # Atlas' generateImage kent geen aparte negative prompt; SeedDream volgt instructies in
+        # natuurlijke taal, dus de belangrijkste verboden gaan als slotzin mee in de prompt zelf.
+        atlas_prompt = trim_text(prompt, 1600)
+        atlas_prompt += (
+            ". Strict rules: no readable text, no captions, no speech bubbles, no watermark; "
+            "do not add any people, faces, silhouettes or animals that are not explicitly described above."
+        )
+        result = atlas_generate_image(key=key, model_id=atlas_model, prompt=atlas_prompt)
+        return {
+            "imageUrl": save_dream_media(result["content"], result["mimeType"], f"atlas_{panel['id']}"),
+            "promptId": f"atlas:{result.get('id') or ''}",
+            "mediaType": "image",
+            "provider": "atlas",
+            "model": atlas_model,
+        }
 
     if model_id == "zimage_turbo":
         if image is None:
@@ -5263,6 +5894,7 @@ def run_comic_job(job_id: str, payload: dict[str, Any]) -> None:
         inventory = scan_models(comfy_path)
         seed = bounded_int(payload.get("seed"), random.randint(1, 2**32 - 1), 1, 2**63 - 1)
         model_choice = select_comic_model(str(payload.get("localModel") or "auto"), inventory)
+        requires_comfy = str(model_choice.get("provider") or "local") == "local"
         render_config = {
             "comfyPath": str(comfy_path),
             "width": payload.get("width"),
@@ -5286,7 +5918,8 @@ def run_comic_job(job_id: str, payload: dict[str, Any]) -> None:
             job_update(job_id, done=True, status="success", resultType="comic_plan", comic=comic)
             return
 
-        comfy_request("/system_stats", timeout=3)
+        if requires_comfy:
+            comfy_request("/system_stats", timeout=3)
         for index, panel in enumerate(comic["panels"], start=1):
             current = job_get(job_id) or {}
             if current.get("cancelRequested"):
@@ -5369,7 +6002,8 @@ def regenerate_panel_job(job_id: str, panel_id: str, base_seed: int | None = Non
     seed = base_seed if base_seed is not None else random.randint(1, 2**32 - 1)
     prev_status = job.get("status") or "success"
     try:
-        comfy_request("/system_stats", timeout=3)
+        if str(model_choice.get("provider") or "local") == "local":
+            comfy_request("/system_stats", timeout=3)
         panel["status"] = "rendering"
         job_update(job_id, comic=job.get("comic"), panelBusy=panel_id, panelError="")
         result = render_comic_panel(panel, render_config, model_choice, comfy_path, image, wan, seed)
@@ -5416,7 +6050,8 @@ def generate_character_reference_job(job_id: str, character_id: str, base_seed: 
         "negativePrompt": build_character_reference_negative_prompt(),
     }
     try:
-        comfy_request("/system_stats", timeout=3)
+        if str(model_choice.get("provider") or "local") == "local":
+            comfy_request("/system_stats", timeout=3)
         character["referenceStatus"] = "rendering"
         job_update(job_id, comic=job.get("comic"), characterBusy=character_id, characterError="")
         result = render_comic_panel(ref_panel, render_config, model_choice, comfy_path, image, wan, seed)
@@ -5638,11 +6273,22 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/api/status":
                 self.handle_status()
+            elif parsed.path == "/api/health":
+                self.send_json({"ok": True, "app": "dreamweaver-comfy", "version": APP_VERSION})
+            elif parsed.path.startswith("/api/handoff/story/"):
+                handoff_id = parsed.path.rsplit("/", 1)[-1]
+                with STORY_HANDOFFS_LOCK:
+                    entry = STORY_HANDOFFS.get(handoff_id)
+                if not entry:
+                    self.send_json({"error": "Handoff niet gevonden of verlopen."}, 404)
+                    return
+                self.send_json(entry)
             elif parsed.path == "/api/models":
                 inventory = scan_models(DEFAULT_COMFY_PATH)
                 self.send_json(
                     {
                         "localModels": local_model_choices(inventory),
+                        "panelModels": panel_model_choices(inventory),
                         "localPlannerModels": local_planner_choices(),
                         "apiPlannerModels": api_planner_choices(),
                         "cloudModels": cloud_model_choices(),
@@ -5678,6 +6324,33 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/transform":
                 data = self.read_json()
                 self.send_json(transform_desire(str(data.get("desire", ""))))
+            elif parsed.path == "/api/handoff/story":
+                data = self.read_json()
+                story = normalize_story_text(str(data.get("story") or ""))
+                if word_count(story) < 5:
+                    self.send_json({"error": "Handoff bevat geen bruikbare verhaaltekst."}, 400)
+                    return
+                handoff_id = uuid.uuid4().hex[:12]
+                entry = {
+                    "id": handoff_id,
+                    "title": trim_text(str(data.get("title") or ""), 200),
+                    "story": story,
+                    "source": trim_text(str(data.get("source") or "extern"), 80),
+                    "autoStart": bool(data.get("autoStart")),
+                    "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                with STORY_HANDOFFS_LOCK:
+                    STORY_HANDOFFS[handoff_id] = entry
+                    while len(STORY_HANDOFFS) > STORY_HANDOFF_LIMIT:
+                        STORY_HANDOFFS.pop(next(iter(STORY_HANDOFFS)))
+                self.send_json(
+                    {
+                        "handoffId": handoff_id,
+                        "url": f"/?handoff={handoff_id}",
+                        "wordCount": word_count(story),
+                        "wordLimit": COMIC_WORD_LIMIT,
+                    }
+                )
             elif parsed.path == "/api/extract-text":
                 data = self.read_json()
                 encoded = str(data.get("dataBase64") or "")
@@ -5820,6 +6493,7 @@ class Handler(BaseHTTPRequestHandler):
                 "helpers": {"wan": wan is not None, "zimage": image is not None},
                 "inventory": inventory,
                 "localModels": local_model_choices(inventory),
+                "panelModels": panel_model_choices(inventory),
                 "localPlannerModels": local_planner_choices(),
                 "apiPlannerModels": api_planner_choices(),
                 "cloudModels": cloud_model_choices(),
@@ -5917,7 +6591,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default=os.environ.get("DREAMWEAVER_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.environ.get("DREAMWEAVER_PORT", "8788")))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("DREAMWEAVER_PORT", "8791")))
     parser.add_argument("--open-browser", action="store_true")
     args = parser.parse_args()
 

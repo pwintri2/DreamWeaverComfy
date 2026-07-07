@@ -1,10 +1,10 @@
-import { cancelJob, createStoryBrief, extractDocumentText, generateCharacterReference, getJob, getSecrets, getStatus, regenerateComicPanel, resetComfy, saveSecret, startComic, startComfy, startDream, updateComicPanel } from "./api.js?v=0.2.10";
-import { setState } from "./state.js?v=0.2.10";
-import { addDream } from "./storage.js?v=0.2.10";
-import { initBackground } from "./ui/background.js?v=0.2.10";
-import { playDream, stopDream, togglePause } from "./ui/dream-player.js?v=0.2.10";
-import { renderHistory } from "./ui/history-view.js?v=0.2.10";
-import { showToast } from "./ui/toast-view.js?v=0.2.10";
+import { cancelJob, createStoryBrief, extractDocumentText, generateCharacterReference, getJob, getSecrets, getStatus, getStoryHandoff, regenerateComicPanel, resetComfy, saveSecret, startComic, startComfy, startDream, updateComicPanel } from "./api.js?v=0.2.13";
+import { setState } from "./state.js?v=0.2.13";
+import { addDream } from "./storage.js?v=0.2.13";
+import { initBackground } from "./ui/background.js?v=0.2.13";
+import { playDream, stopDream, togglePause } from "./ui/dream-player.js?v=0.2.13";
+import { renderHistory } from "./ui/history-view.js?v=0.2.13";
+import { showToast } from "./ui/toast-view.js?v=0.2.13";
 
 const views = {
   comic: document.getElementById("comicView"),
@@ -100,11 +100,13 @@ function setOptions(select, options, fallbackLabel, config = {}) {
     option.dataset.description = item.description || "";
     option.textContent = item.label;
     if (item.recommended) recommended = item.id;
-    const unavailable = item.supported === false || item.configured === false;
+    const unsupported = item.supported === false;
+    const missingConfig = item.configured === false;
+    const unavailable = unsupported || missingConfig;
     if (unavailable && annotateUnavailable) {
-      option.textContent = `${item.label} (${item.configured === false ? "key nodig" : "niet actief"})`;
+      option.textContent = `${item.label} (${missingConfig ? "key nodig" : "niet actief"})`;
     }
-    if (unavailable && disableUnavailable) {
+    if (unsupported || (missingConfig && disableUnavailable)) {
       option.disabled = true;
     }
     select.appendChild(option);
@@ -144,6 +146,16 @@ function selectedPlannerId() {
   return localSelect?.value || "local_rules";
 }
 
+function selectedPanelRendererId() {
+  const select = document.getElementById("localComicModelSelect");
+  const selected = select?.selectedOptions?.[0];
+  if (selected?.dataset.configured === "false") {
+    const label = selected.textContent.replace(/\s+\(key nodig\)$/, "");
+    throw new Error(`Koppel eerst de API-key voor ${label} via instellingen.`);
+  }
+  return select?.value || "auto";
+}
+
 function syncPlannerControls() {
   const source = document.getElementById("plannerSourceSelect")?.value || "local";
   const localSelect = document.getElementById("localPlannerSelect");
@@ -159,6 +171,30 @@ function syncPlannerControls() {
       ? "API-planner actief zodra Plannerbron op API-model staat."
       : "Koppel eerst een API-key via instellingen om een API-planner te gebruiken.";
   }
+}
+
+function syncPanelRendererControls() {
+  const select = document.getElementById("localComicModelSelect");
+  const hint = document.getElementById("panelRendererHint");
+  if (!hint) return;
+  const selected = select?.selectedOptions?.[0];
+  if (!selected) {
+    hint.textContent = "Kies hier welk model de strippanels maakt.";
+    return;
+  }
+  if (selected.dataset.provider === "modelslab") {
+    hint.textContent = selected.dataset.configured === "false"
+      ? "Modelslab maakt de plaatjes; koppel eerst de Modelslab API-key voordat je rendert."
+      : "Modelslab maakt de plaatjes voor panels en portretten.";
+    return;
+  }
+  if (selected.dataset.provider === "atlas") {
+    hint.textContent = selected.dataset.configured === "false"
+      ? "Atlas Cloud maakt de plaatjes (zoals in ImagineAI); koppel eerst de Atlas API-key voordat je rendert."
+      : "Atlas Cloud maakt de plaatjes voor panels en portretten (zelfde dienst als in ImagineAI).";
+    return;
+  }
+  hint.textContent = "Lokale ComfyUI maakt de plaatjes voor panels en portretten.";
 }
 
 function syncDreamRendererControls() {
@@ -628,7 +664,9 @@ async function refreshStatus() {
     statusElement.style.color = status.comfyRunning ? "var(--good)" : "var(--muted)";
     document.getElementById("startComfyBtn").disabled = status.comfyRunning;
     setOptions(document.getElementById("dreamRendererSelect"), status.dreamRenderers || [], "Standaard lokaal");
-    setOptions(document.getElementById("localComicModelSelect"), status.localModels || [], "Auto");
+    setOptions(document.getElementById("localComicModelSelect"), status.panelModels || status.localModels || [], "Auto", {
+      disableUnavailable: false,
+    });
     const combinedPlanners = status.cloudModels || [];
     const localPlanners = status.localPlannerModels || combinedPlanners.filter((item) => ["local", "ollama"].includes(item.provider));
     const apiPlanners = status.apiPlannerModels || combinedPlanners.filter((item) => !["local", "ollama", "replicate"].includes(item.provider));
@@ -638,6 +676,7 @@ async function refreshStatus() {
       preferFirstConfigured: true,
     });
     syncPlannerControls();
+    syncPanelRendererControls();
     syncDreamRendererControls();
     setState({ status });
   } catch (error) {
@@ -850,7 +889,7 @@ function payloadFromComicForm() {
   return {
     story: document.getElementById("storyInput").value.trim(),
     style: document.getElementById("comicStyleSelect").value,
-    localModel: document.getElementById("localComicModelSelect").value,
+    localModel: selectedPanelRendererId(),
     cloudModel: selectedPlannerId(),
     renderMode: document.getElementById("comicRenderModeSelect").value,
     storyBrief: currentStoryBrief,
@@ -1027,6 +1066,7 @@ function bindEvents() {
   });
 
   document.getElementById("comicStyleSelect").addEventListener("change", resetStoryBrief);
+  document.getElementById("localComicModelSelect").addEventListener("change", syncPanelRendererControls);
   document.getElementById("plannerSourceSelect").addEventListener("change", () => {
     syncPlannerControls();
     resetStoryBrief();
@@ -1112,6 +1152,36 @@ async function replayDream(dream) {
   await playDream(dream);
 }
 
+async function applyStoryHandoff() {
+  // Extern aangeleverd verhaal (bijv. de knop "Maak stripverhaal" in BookReader):
+  // /?handoff=<id> laadt het verhaal in het stripformulier en start desgewenst direct.
+  const params = new URLSearchParams(window.location.search);
+  const handoffId = params.get("handoff");
+  if (!handoffId) {
+    return;
+  }
+  window.history.replaceState({}, "", window.location.pathname);
+  try {
+    const handoff = await getStoryHandoff(handoffId);
+    if (!handoff.story) {
+      throw new Error("Handoff bevat geen verhaaltekst.");
+    }
+    const storyInput = document.getElementById("storyInput");
+    storyInput.value = handoff.story;
+    updateStoryCount();
+    showView("comic");
+    const label = handoff.title ? `"${handoff.title}"` : "zonder titel";
+    if (handoff.autoStart) {
+      showToast(`Verhaal ${label} ontvangen van ${handoff.source || "extern"}; strip wordt gemaakt...`, 6500);
+      document.getElementById("comicForm").requestSubmit();
+    } else {
+      showToast(`Verhaal ${label} ontvangen van ${handoff.source || "extern"}. Kies je stijl en klik op Maak strip.`, 6500);
+    }
+  } catch (error) {
+    showToast(`Verhaal-handoff kon niet worden geladen: ${error.message}`, 5200);
+  }
+}
+
 async function boot() {
   initBackground(document.getElementById("backgroundCanvas"));
   bindEvents();
@@ -1119,6 +1189,7 @@ async function boot() {
   updateStoryCount();
   showView("comic");
   await refreshStatus();
+  await applyStoryHandoff();
   setInterval(refreshStatus, 15000);
 }
 

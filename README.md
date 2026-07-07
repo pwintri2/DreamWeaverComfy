@@ -54,7 +54,26 @@ few hallucinations as possible.
   generate a reference portrait per character.
 - **Pluggable planners**: fast local rules, local **Ollama** models, or cloud
   **OpenAI / Anthropic / Gemini / Grok** via an in-app API-keys page.
+- **Pluggable panel renderers**: local ComfyUI models or cloud **Modelslab** /
+  **Atlas Cloud** (same service as ImagineAI, default `seedream-3.0`)
+  text-to-image models for strip panels and character references.
+- **Entity classification** (LLM planners): every named entity is explicitly
+  typed (person / animal / sentient being / place / object / organization /
+  voice-or-thought / metaphor) so only real acting beings become characters;
+  places and objects are routed to the story bible instead.
+- **Literal vs figurative split**: the analysis collects figurative phrases
+  ("her heart was a caged bird") with what a naive illustrator might wrongly
+  draw; per panel the beat is split into literal subject-verb-object actions
+  and figurative phrases. Figurative phrases are excluded via the negative
+  prompt and stored on the panel (`literalCheck`) for auditing.
+- **Event-aligned panel beats** (LLM planners): scenes are cut into panels at
+  event boundaries (new action, character enters/leaves, location shift)
+  instead of pure word count, with strict validation and an even-split fallback.
 - **Document input**: `.txt`, `.md`, `.docx`, and text-based PDF.
+- **Story handoff API**: external apps (like BookReader's **Maak stripverhaal**
+  button) can `POST /api/handoff/story` (`{title, story, autoStart}`); opening
+  `/?handoff=<id>` pre-fills the comic form and, with `autoStart`, immediately
+  starts building the comic. `GET /api/health` is a lightweight liveness probe.
 
 ## Planners
 
@@ -74,13 +93,33 @@ In the comic form, **Plannerbron** chooses whether the story planner uses
 local planner dropdown so Gemini, Grok and other cloud planners can be selected
 explicitly.
 
-## Image / video models (ComfyUI)
+## Panel renderers
 
-Rendering uses the models installed in your ComfyUI:
+Panel rendering can use the models installed in your ComfyUI:
 
 - **Z-Image Turbo** (`diffusion_models/z_image_turbo_bf16.safetensors`) — text→image.
 - **Wan 2.1 / 2.2** — text→video, one still per panel.
 - Generic SD/SDXL checkpoints from `models/checkpoints/` (if present).
+
+Or choose **Modelslab** in the panel-renderer dropdown. Add your key in the app
+via gear menu → **API-keys koppelen…** or set `MODELSLAB_API_KEY`. The default
+Modelslab entries are `flux` and `sdxl`; add more with:
+
+```sh
+MODELSLAB_IMAGE_MODELS="model-id|Friendly label,another-model-id"
+```
+
+Or choose **Atlas Cloud** (the same service used by ImagineAI). Add your key via
+the API-keys page or set `ATLAS_API_KEY`. The default image model is
+`seedream-3.0`; override it with `ATLAS_IMAGE_MODEL` or add extra entries with:
+
+```sh
+ATLAS_IMAGE_MODELS="model-id|Friendly label,another-model-id"
+```
+
+> Atlas' `generateImage` API has no separate negative prompt or seed; the most
+> important restrictions (no text/watermark, no unlisted characters) are appended
+> to the prompt as natural-language rules, which SeedDream follows well.
 
 > Note: true identity-lock (IP-Adapter / InstantID) is **not** supported on the
 > Z-Image/Wan stack — those adapters target SD1.5/SDXL and require models/nodes
@@ -139,6 +178,9 @@ ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 GEMINI_MODEL=gemini-2.0-flash
 GROK_MODEL=grok-4.3
 XAI_API_KEY=xai-...
+MODELSLAB_API_KEY=...
+MODELSLAB_IMAGE_MODEL=flux
+MODELSLAB_IMAGE_MODELS="sdxl|SDXL"
 ```
 
 ## HTTP API (selected)
@@ -159,7 +201,7 @@ POST /api/extract-text               extract text from an uploaded document
 
 ## Known limitations
 
-- **Image–story fidelity is improved but still imperfect.** Stricter cast rules, grounded distillation with hallucination gates, and heavy negative-prompt enforcement on extra people help a lot (see server.py changes), but text-to-image on Z-Image/Wan remains relatively loose. True strong fidelity needs reference-image conditioning, ControlNet, or a different base model (IP-Adapter not available on this stack).
+- **Image–story fidelity is improved but still imperfect.** Stricter cast rules, grounded distillation with hallucination gates, and heavy negative-prompt enforcement on extra people help a lot (see server.py changes), but text-to-image on Z-Image/Wan/Modelslab remains relatively loose. True strong fidelity needs reference-image conditioning, ControlNet, or a different base model (IP-Adapter not available on this stack).
 - **Character extraction is now hardened.** Only real persons/animals that act or speak survive to the Character Bible and portrait buttons. Non-persons (objects, places, concepts, shadows/voices/etc.) are filtered via blocklists, context scoring, `is_likely_real_person`, and LLM strictness. Portraits are now reliably only for actual characters.
 - **Speech balloons are not rendered yet.** Dialogue is extracted into the panel
   data (`panel.dialogue`) but not yet drawn as an overlay.
@@ -171,7 +213,9 @@ POST /api/extract-text               extract text from an uploaded document
 - API keys live only in `data/secrets.json` (gitignored, owner-readable). Do not
   commit secrets.
 - Cloud planners send your story text to the selected provider — the Story Bible
-  shows a note when this happens. Local rules and Ollama keep everything local.
+  shows a note when this happens. Modelslab panel rendering sends only the final
+  panel prompt and negative prompt for each rendered panel/reference. Local rules,
+  Ollama and local ComfyUI rendering keep everything local.
 
 ## Project layout
 

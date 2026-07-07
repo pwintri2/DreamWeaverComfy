@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dreamweaver Comfy</title>
-  <link rel="stylesheet" href="styles.css?v=0.2.10">
+  <link rel="stylesheet" href="styles.css?v=0.2.13">
 </head>
 <body>
   <canvas id="backgroundCanvas" aria-hidden="true"></canvas>
@@ -54,10 +54,11 @@
             </select>
           </label>
           <label>
-            Render-model
+            Panel-renderer
             <select id="localComicModelSelect">
               <option value="auto">Auto</option>
             </select>
+            <span id="panelRendererHint" class="field-hint">Kies hier welk model de plaatjes maakt.</span>
           </label>
           <label>
             Plannerbron
@@ -284,6 +285,6 @@
   </dialog>
 
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
-  <script type="module" src="main.js?v=0.2.10"></script>
+  <script type="module" src="main.js?v=0.2.13"></script>
 </body>
 </html>

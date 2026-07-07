@@ -105,3 +105,7 @@ export async function saveSecret(provider, key) {
     body: JSON.stringify({ provider, key }),
   }));
 }
+
+export async function getStoryHandoff(handoffId) {
+  return readJson(await fetch(`/api/handoff/story/${encodeURIComponent(handoffId)}`));
+}
