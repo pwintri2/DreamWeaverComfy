@@ -194,6 +194,10 @@ function syncPanelRendererControls() {
       : "Atlas Cloud maakt de plaatjes voor panels en portretten (zelfde dienst als in ImagineAI).";
     return;
   }
+  if (selected.dataset.description) {
+    hint.textContent = selected.dataset.description;
+    return;
+  }
   hint.textContent = "Lokale ComfyUI maakt de plaatjes voor panels en portretten.";
 }
 
@@ -659,6 +663,7 @@ async function refreshStatus() {
       inventory.wan22 ? "Wan 2.2" : null,
       inventory.wan21 ? "Wan 2.1" : null,
       inventory.zimage ? "Z-Image" : null,
+      inventory.flux1_schnell_fp8 ? "FLUX.1 Schnell" : null,
     ].filter(Boolean).join(", ") || "geen complete modelset gevonden";
     statusElement.textContent = `${status.comfyRunning ? "online" : "offline"} · ${models}`;
     statusElement.style.color = status.comfyRunning ? "var(--good)" : "var(--muted)";
